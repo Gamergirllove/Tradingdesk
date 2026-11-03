@@ -1,0 +1,230 @@
+import asyncio
+import json
+import time
+
+import pytest
+from cryptography.hazmat.primitives import hashes, serialization
+from cryptography.hazmat.primitives.asymmetric import ed25519, padding, rsa
+
+from desk import ledger
+from desk.book.positions import Bench, Book
+from desk.broker.paper import PaperBroker
+from desk.config import effective_mode, load_config, set_override
+from desk.policy import rules
+from desk.policy.calibration import Calibrator, fit_platt
+from desk.questions import gambler as qg, house as qh, scan as qs
+from desk.questions.base import choice, normalize, noul, schema_for, score, validate
+from desk.risk.engine import Intent, RiskEngine
+from desk.state.market import fair_yes
+from desk.bots.house import compute_quotes
+from desk.util import kalshi_fee
+from desk.venues.kalshi import Book as KBook, Signer, parse_book
+
+
+def test_batteries_valid():
+    for b in (qg.BATTERY, qh.BATTERY, qs.battery("gambler", ["A", "B", "C"]), qs.battery("house", ["A"])):
+        assert validate(b) == []
+    sch = schema_for(qg.BATTERY)
+    assert set(sch["required"]) == {q.id for q in qg.BATTERY}
+    assert all(c["additionalProperties"] is False for c in sch["properties"].values())
+
+
+def test_validate_catches_bad():
+    bad = [noul("a", "x", []), noul("a", "y", [])]
+    assert "duplicate question ids" in validate(bad)
+    c = choice("c", "pick", {"only": "one"}, [])
+    assert any("single real option" in e for e in validate([c]))
+    s = score("s", "rate", {0: "a"}, [])
+    assert any("score needs" in e for e in validate([s]))
+
+
+def test_normalize():
+    q = choice("r", "x", {"a": "", "b": ""}, [])
+    n = normalize(q, {"a": 3, "b": 1, "other": 0})
+    assert n["pick"] == "a" and abs(sum(n["probs"].values()) - 1) < 1e-3
+    s = score("s", "x", {0: "", 1: "", 2: "", 3: ""}, [])
+    n = normalize(s, {"L0": .1, "L1": .2, "L2": .3, "L3": .4})
+    assert abs(n["p_ge"]["2"] - 0.7) < 1e-3 and abs(n["ev"] - 2.0) < 1e-3
+    assert normalize(noul("n", "x", []), {"p_true": 1.7})["p"] == 1.0
+
+
+def test_fee_and_fair():
+    assert kalshi_fee(0.5, 1) == 0.02            # 0.0175 rounds up to a cent
+    assert kalshi_fee(0.5, 100) == 1.75
+    assert kalshi_fee(0.5, 10, maker=True) == 0.0
+    assert kalshi_fee(0.5, 10, "quadratic_with_maker_fees", maker=True) == 0.05
+    p = fair_yes("greater", 80000, None, 80000, 0.5, 60)
+    assert 0.45 < p < 0.51
+    assert fair_yes("greater", 81000, None, 80000, 0.5, 60) < 0.1
+    b = fair_yes("between", 79900, 80100, 80000, 0.5, 60)
+    assert 0 < b < 1
+
+
+def test_parse_book():
+    b = parse_book("T", {"orderbook_fp": {"yes_dollars": [["0.2000", "10"], ["0.2400", "44"]],
+                                          "no_dollars": [["0.7100", "9"], ["0.7500", "18"]]}})
+    assert b.best_bid == 0.24 and b.best_ask == 0.25 and b.asks[1][0] == 0.29
+
+
+@pytest.mark.parametrize("kind", ["rsa", "ed"])
+def test_signer(kind):
+    if kind == "rsa":
+        k = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+        pem = k.private_bytes(serialization.Encoding.PEM, serialization.PrivateFormat.TraditionalOpenSSL,
+                              serialization.NoEncryption()).decode()
+    else:
+        k = ed25519.Ed25519PrivateKey.generate()
+        pem = k.private_bytes(serialization.Encoding.PEM, serialization.PrivateFormat.PKCS8,
+                              serialization.NoEncryption()).decode()
+    s = Signer("kid", pem)
+    h = s.headers("GET", "/trade-api/v2/portfolio/balance?x=1")
+    import base64
+    msg = f"{h['KALSHI-ACCESS-TIMESTAMP']}GET/trade-api/v2/portfolio/balance".encode()
+    sig = base64.b64decode(h["KALSHI-ACCESS-SIGNATURE"])
+    if kind == "rsa":
+        k.public_key().verify(sig, msg, padding.PSS(mgf=padding.MGF1(hashes.SHA256()),
+                                                    salt_length=padding.PSS.DIGEST_LENGTH), hashes.SHA256())
+    else:
+        k.public_key().verify(sig, msg)
+
+
+def _ans(**kw):
+    base = {
+        "regime": {"probs": {"trending": .7, "mean_reverting": .2, "chaotic": .05, "other": .05}, "pick": "trending"},
+        "pressure": {"p": .7},
+        "setup": {"probs": {"0": .05, "1": .15, "2": .4, "3": .4}, "p_ge": {"0": 1, "1": .95, "2": .8, "3": .4}},
+        "action": {"probs": {"buy_yes": .7, "buy_no": .05, "hold": .2, "other": .05}, "pick": "buy_yes"},
+        "worth": {"p": .7}, "exec_degraded": {"p": .1}}
+    base.update(kw)
+    return base
+
+
+def test_gambler_policy():
+    cfg = load_config()
+    pol = cfg["policy"]["gambler"]
+    cal = Calibrator()
+    assert rules.gambler(_ans(), {"model_edge_c": 5}, pol, cal).action == "buy_yes"
+    assert rules.gambler(_ans(), {"model_edge_c": 1}, pol, cal).action == "hold"      # code edge too small
+    assert rules.gambler(_ans(), {"model_edge_c": None}, pol, cal).action == "hold"   # missing is not neutral
+    assert rules.gambler(_ans(exec_degraded={"p": .8}), {"model_edge_c": 5}, pol, cal).action == "hold"
+    a = _ans(action={"probs": {"buy_yes": .05, "buy_no": .75, "hold": .15, "other": .05}, "pick": "buy_no"})
+    assert rules.gambler(a, {"model_edge_c": -5}, pol, cal).action == "buy_no"
+    assert rules.gambler(a, {"model_edge_c": 5}, pol, cal).action == "hold"           # model and code disagree
+
+
+def test_house_policy_and_quotes():
+    cfg = load_config()
+    pol, cal = cfg["policy"]["house"], Calibrator()
+    good = {"range_state": {"probs": {"inside": .8, "testing_edge": .1, "breaking_out": .05, "other": .05}},
+            "toxic": {"p": .2}, "env": {"p_ge": {"2": .7}}, "volume_alive": {"p": .9}}
+    assert rules.house(good, pol, cal).action == "quote"
+    assert rules.house({**good, "toxic": {"p": .6}}, pol, cal).action == "widen"
+    assert rules.house({**good, "toxic": {"p": .9}}, pol, cal).action == "pull"
+    assert rules.house({**good, "volume_alive": {"p": .1}}, pol, cal).action == "kill"
+    feat = {"bid": 0.40, "ask": 0.44, "mid": 0.42, "microprice": 0.42, "rv_30m_c": 1.0}
+    c = cfg["bots"]["house"]
+    qb, qa, _ = compute_quotes(feat, 0, c, widen=False)
+    assert qb < 0.44 and qa > 0.40 and qb < qa
+    qb2, qa2, _ = compute_quotes(feat, 10, c, widen=False)     # long inventory skews quotes down
+    assert qb2 <= qb and qa2 <= qa
+    qb3, qa3, _ = compute_quotes(feat, c["max_inventory"], c, widen=False)
+    assert qb3 is None and qa3 is not None
+
+
+def test_scan_pick():
+    pol = {"worth_min": 0.5}
+    ans = {"best": {"probs": {"A": .6, "B": .3, "other": .1}}, "worth_A": {"p": .4}, "worth_B": {"p": .7}}
+    pick, _ = rules.scan_pick(ans, ["A", "B"], pol)
+    assert pick == "B"          # A won the choice but failed the absolute check
+    ans["best"]["probs"] = {"A": .2, "B": .2, "other": .6}
+    assert rules.scan_pick(ans, ["A", "B"], pol)[0] is None
+
+
+def test_risk_engine():
+    cfg = load_config()
+    r = RiskEngine(cfg, "America/Los_Angeles")
+    it = Intent(bot="gambler", ticker="T", side="bid", count=5, price=0.40, expected_edge_c=5, state_ts=time.time(),
+                model_version="m1", tag="entry")
+    assert r.check(it, 0, 0, 100)[0]
+    r.pin("m1")
+    assert not r.check(Intent(**{**it.to_dict(), "model_version": "m2"}), 0, 0, 100)[0]
+    assert not r.check(Intent(**{**it.to_dict(), "expected_edge_c": 1.0}), 0, 0, 100)[0]      # below fees + min
+    assert not r.check(Intent(**{**it.to_dict(), "count": 50}), 0, 0, 100)[0]
+    assert not r.check(Intent(**{**it.to_dict(), "state_ts": time.time() - 999}), 0, 0, 100)[0]
+    assert not r.check(it, 0, 24, 100)[0]                                                    # exposure cap
+    r.halt("test")
+    assert not r.check(it, 0, 0, 100)[0]
+    ex = Intent(bot="gambler", ticker="T", side="ask", count=5, price=0.40, reduce_only=True, tif="immediate_or_cancel")
+    assert r.check(ex, 5, 0, None)[0]                                                        # exits pass during halts
+    q = Intent(bot="house", ticker="T", side="bid", count=5, price=0.30, post_only=True, expected_edge_c=2,
+               band=(0.35, 0.50), best_ask=0.32, tag="quote", state_ts=time.time())
+    r.clear_halt()
+    assert not r.check(q, 0, 0, 100)[0]                                                      # range guard
+    ok, why = r.check(Intent(**{**q.to_dict(), "price": 0.36, "best_ask": 0.36}), 0, 0, 100)
+    assert not ok and "post_only_cross" in why
+
+
+def test_paper_broker():
+    b = PaperBroker("t", bankroll=100)
+    book = KBook("T", time.time(), bids=[(0.40, 10)], asks=[(0.42, 10)])
+    it = Intent(bot="g", ticker="T", side="bid", count=5, price=0.42, tif="immediate_or_cancel")
+    ack = asyncio.run(b.place(it, book))
+    assert ack.filled == 5 and abs(ack.avg_price - 0.42) < 1e-9
+    assert abs(b.cash - (100 - 5 * 0.42 - ack.fee)) < 1e-9
+    it2 = Intent(bot="g", ticker="T", side="ask", count=5, price=0.40, tif="immediate_or_cancel", reduce_only=True)
+    ack2 = asyncio.run(b.place(it2, book))
+    assert ack2.filled == 5 and asyncio.run(b.position("T")).qty == 0
+    assert abs(b.cash - (100 - 5 * 0.02 - ack.fee - ack2.fee)) < 1e-6
+    # resting maker bid filled by a trade-through
+    q = Intent(bot="h", ticker="T", side="bid", count=5, price=0.40, post_only=True)
+    ack3 = asyncio.run(b.place(q, book))
+    assert ack3.status == "resting"
+    b.on_market("T", book, [(time.time() + 1, 0.39, 20, "ask")])
+    assert asyncio.run(b.position("T")).qty == 5
+    b.settle("T", "yes")
+    assert asyncio.run(b.position("T")).qty == 0
+
+
+def test_book_and_bench():
+    bk = Book()
+    assert bk.acquire("gambler", "T", "lead1")
+    assert not bk.acquire("gambler", "U", "lead2")      # one position at a time
+    bk.release("gambler", "x", "wrong")                  # only the closing path frees the book
+    assert bk.held("gambler")
+    bk.release("gambler", "exit", "lead1")
+    assert bk.held("gambler") is None
+    be = Bench({"too_early": 20, "malformed": 100000})
+    be.bench("g:T", "too_early")
+    assert be.benched("g:T") == "too_early"
+    be.bench("g:U", "too_early", until=time.time() - 1)
+    assert be.benched("g:U") is None
+
+
+def test_config_override_and_modes():
+    cfg = load_config()
+    assert effective_mode(cfg, "gambler") == "shadow"
+    set_override("bots.gambler.mode", "live")
+    set_override("desk.mode_ceiling", "paper")
+    cfg = load_config()
+    assert effective_mode(cfg, "gambler") == "paper"
+
+
+def test_ledger_and_platt():
+    ledger.record("judge", 0.01)
+    ledger.record("seat:head", 0.005)
+    assert abs(ledger.spent() - 0.015) < 1e-9
+    a, b = fit_platt([0.9] * 50 + [0.1] * 50, [1] * 25 + [0] * 25 + [0] * 50)
+    cal = Calibrator()
+    cal.params["k"] = (a, b)
+    assert cal("k", 0.9) < 0.9                           # overconfident 0.9s get pulled down
+
+
+def test_implied_sigma_roundtrip():
+    from desk.state.market import event_iv, implied_sigma
+    p = fair_yes("greater", 79500, None, 80000, 0.42, 300)
+    iv = implied_sigma(79500, 80000, 300, p)
+    assert abs(iv - 0.42) < 1e-3
+    close = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(time.time() + 300 * 60))
+    ladder = [{"event_ticker": "E", "strike_type": "greater", "floor_strike": 79500, "close_time": close,
+               "yes_bid_dollars": f"{p - 0.005:.4f}", "yes_ask_dollars": f"{p + 0.005:.4f}"}]
+    assert abs(event_iv(ladder, "E", 80000) - 0.42) < 0.03

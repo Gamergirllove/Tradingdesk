@@ -1,0 +1,14 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no,viewport-fit=cover">
+<meta name="theme-color" content="#0b0d10"><link rel="manifest" href="/manifest.webmanifest">
+<title>Desk</title><link rel="stylesheet" href="/static/base.css"></head>
+<body><div class="wrap" style="padding-top:18vh">
+<div class="card"><h1>Trading Desk</h1><p class="dim small">Enter your dashboard password.</p>
+<input id="pw" type="password" autocomplete="current-password" placeholder="Password">
+<button class="primary" id="go">Unlock</button><p id="msg" class="small" style="color:var(--bad)"></p></div></div>
+<script>
+async function go(){const r=await fetch('/login',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({password:pw.value})});
+const j=await r.json();if(j.ok)location.reload();else msg.textContent=j.error||'failed'}
+document.getElementById('go').onclick=go;pw.addEventListener('keydown',e=>{if(e.key==='Enter')go()});
+</script></body></html>

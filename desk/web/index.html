@@ -1,0 +1,166 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no,viewport-fit=cover">
+<meta name="theme-color" content="#0b0d10"><meta name="apple-mobile-web-app-capable" content="yes">
+<link rel="manifest" href="/manifest.webmanifest"><title>Desk</title>
+<link rel="stylesheet" href="/static/base.css"></head>
+<body>
+<div class="wrap">
+  <div class="row" style="margin:6px 0 14px"><h1>Desk</h1><span id="deskPill" class="pill">…</span></div>
+
+  <!-- DESK -->
+  <section id="t-desk">
+    <div class="card">
+      <div class="row"><h2 style="margin:0">AI spend today</h2><span id="aiTxt" class="mono dim"></span></div>
+      <div class="bar" style="margin-top:10px"><i id="aiBar" style="width:0"></i></div>
+      <div class="row small dim" style="margin-top:8px"><span id="judgeTxt"></span><span id="pinTxt"></span></div>
+    </div>
+    <div id="bots"></div>
+    <div class="card"><h2>Equity</h2><div id="equity" class="kv"></div></div>
+    <button class="danger" id="kill">Kill switch: pull all quotes and halt</button>
+    <p class="dim small" style="text-align:center">Tap twice to confirm. Resuming needs APPROVE.</p>
+  </section>
+
+  <!-- APPROVE -->
+  <section id="t-appr" class="hide">
+    <div id="apprList"></div>
+  </section>
+
+  <!-- LOG -->
+  <section id="t-log" class="hide">
+    <div class="card"><h2>Decisions</h2><div id="decList"></div></div>
+    <div class="card"><h2>Risk vetoes</h2><div id="vetoList"></div></div>
+    <div class="card"><h2>Trades</h2><div id="tradeList"></div></div>
+  </section>
+
+  <!-- REPORTS -->
+  <section id="t-rep" class="hide">
+    <div class="card"><h2>Daily summary</h2><pre id="daily"></pre></div>
+    <div class="card"><div class="row"><h2 style="margin:0">Calibration</h2><button class="ghost" style="width:auto" id="recal">Rebuild</button></div>
+      <div id="cal" style="margin-top:8px"></div></div>
+    <div class="card"><h2>Ask a seat</h2>
+      <select id="seat"><option value="head">HEAD of desk</option><option value="risk">RISK</option><option value="exit">EXIT</option>
+      <option value="search">SEARCH</option><option value="review">REVIEW</option></select>
+      <input id="seatQ" placeholder="e.g. what did the desk do today and why?">
+      <button id="ask">Ask (uses AI budget)</button></div>
+    <div id="seatReports"></div>
+  </section>
+
+  <!-- SETUP -->
+  <section id="t-set" class="hide">
+    <div class="card"><h2>Keys</h2>
+      <div id="keyState" class="kv" style="margin-bottom:10px"></div>
+      <label>Anthropic API key</label><input id="ak" placeholder="sk-ant-... (leave blank to keep)" autocomplete="off">
+      <label>Kalshi key ID</label><input id="kid" autocomplete="off">
+      <label>Kalshi private key</label><textarea id="kpem" placeholder="-----BEGIN PRIVATE KEY-----"></textarea>
+      <label>Kalshi DEMO key ID</label><input id="did" autocomplete="off">
+      <label>Kalshi DEMO private key</label><textarea id="dpem"></textarea>
+      <button class="primary" id="saveKeys">Save keys</button></div>
+    <div class="card"><h2>Server</h2><div class="kv"><b>Link</b><span id="url" class="mono"></span><b>Uptime</b><span id="up"></span></div>
+      <button style="margin-top:12px" id="upd">Pull latest code and restart</button></div>
+  </section>
+</div>
+
+<nav class="tabs">
+  <button data-t="desk" class="on"><span class="ic">◉</span>Desk</button>
+  <button data-t="appr"><span class="ic">✓</span>Approve<span id="apprBadge" class="badge hide">0</span></button>
+  <button data-t="log"><span class="ic">≡</span>Log</button>
+  <button data-t="rep"><span class="ic">◔</span>Reports</button>
+  <button data-t="set"><span class="ic">⚙</span>Setup</button>
+</nav>
+<div id="toast" class="toast hide"></div>
+
+<script>
+const $=id=>document.getElementById(id);
+const esc=s=>String(s??'').replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+const fmt=(x,d=2)=>x==null?'–':Number(x).toFixed(d);
+let S=null,tab='desk',killArm=0;
+function toast(m){const t=$('toast');t.textContent=m;t.classList.remove('hide');clearTimeout(t._h);t._h=setTimeout(()=>t.classList.add('hide'),3500)}
+async function api(p,b){const r=await fetch(p,b?{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify(b)}:{});
+ if(r.status===401){location.reload();return{}}return r.json()}
+document.querySelectorAll('.tabs button').forEach(b=>b.onclick=()=>{tab=b.dataset.t;
+ document.querySelectorAll('.tabs button').forEach(x=>x.classList.toggle('on',x===b));
+ document.querySelectorAll('section').forEach(s=>s.classList.toggle('hide',s.id!=='t-'+tab));load()});
+
+function stateColor(s){if(!s)return'';if(/quoting|in_position/.test(s))return'good';if(/blocked|halt|vetoed/.test(s))return'bad';
+ if(/hold|pause|pull|range|no_|flatten/.test(s))return'warn';return'acc'}
+function botCard(name,b){
+ const st=b.status||{};const lk=b.lock;const rung=b.configured_mode;
+ const seg=S.ladder.map(m=>`<button class="${m===rung?'on':''}" onclick="setMode('${name}','${m}')">${m}</button>`).join('');
+ const rows=[];if(b.mode!==rung)rows.push(['Running at',b.mode+' (ceiling or missing key)']);
+ if(st.ticker)rows.push(['Market',`<span class="mono">${esc(st.ticker)}</span>`]);
+ if(st.reason||st.why)rows.push(['Why',esc(st.reason||st.why)]);
+ if(st.reasons)rows.push(['Why',esc(st.reasons.join('; '))]);
+ if(st.bid!=null||st.ask!=null)rows.push(['Quotes',`${fmt(st.bid)} / ${fmt(st.ask)}  inv ${fmt(st.inv,0)}`]);
+ if(lk&&lk.entry!=null)rows.push(['Position',`${lk.side==='bid'?'YES':'NO'} ${fmt(lk.qty,0)} @ ${fmt(lk.entry)}  stop ${fmt(lk.stop)}  tp ${fmt(lk.tp)}`]);
+ if(st.funnel)rows.push(['Funnel',`${st.funnel.universe} → ${st.funnel.after_free_cut} → ${st.funnel.after_depth} → ${st.funnel.after_facts} → ${st.funnel.pick?'pick':'no trade'}`]);
+ const blocked=b.blocked;
+ return `<div class="card"><div class="row"><h1 style="text-transform:capitalize">${name}</h1>
+  <span class="pill ${stateColor(st.state)}">${esc(st.state||'idle')}</span></div>
+  <div class="kv" style="margin-top:10px">${rows.map(r=>`<b>${r[0]}</b><span>${r[1]}</span>`).join('')}</div>
+  <div class="seg">${seg}</div>
+  <div class="grid2" style="margin-top:10px">${blocked?`<button onclick="ctl('unpause','${name}')">Resume</button>`:`<button onclick="ctl('pause','${name}')">Pause</button>`}
+  <button class="ghost" onclick="tabTo('log')">Decisions</button></div>
+  ${blocked?`<p class="small" style="color:var(--warn);margin:8px 0 0">${esc(blocked)}</p>`:''}</div>`}
+function tabTo(t){document.querySelector(`.tabs button[data-t="${t}"]`).click()}
+
+async function load(){
+ S=await api('/api/status');if(!S.bots)return;
+ const halted=S.risk.halted;$('deskPill').textContent=halted?'HALTED':'RUNNING';$('deskPill').className='pill '+(halted?'bad':'good');
+ const n=S.approvals.length;$('apprBadge').textContent=n;$('apprBadge').classList.toggle('hide',!n);
+ if(tab==='desk')renderDesk();if(tab==='appr')renderAppr();if(tab==='log')renderLog();if(tab==='rep')renderRep();if(tab==='set')renderSet()}
+function renderDesk(){
+ const a=S.ai;const pct=a.cap?Math.min(100,100*a.spent/a.cap):0;$('aiBar').style.width=pct+'%';
+ $('aiBar').style.background=pct>90?'var(--bad)':pct>70?'var(--warn)':'var(--accent)';
+ $('aiTxt').textContent=`$${fmt(a.spent,4)} / $${fmt(a.cap)}`;
+ const j=S.judge||{};$('judgeTxt').textContent=j.has_key?`judge ${j.backend} ready`:(j.ok?'judge: add Anthropic key':'judge offline');
+ $('pinTxt').textContent=S.risk.pinned_version?('pinned '+S.risk.pinned_version):'version not pinned yet';
+ $('bots').innerHTML=Object.entries(S.bots).map(([k,v])=>botCard(k,v)).join('');
+ const eq=Object.entries(S.equity||{});$('equity').innerHTML=eq.length?eq.map(([k,v])=>`<b>${esc(k)}</b><span class="mono">$${fmt(v)}</span>`).join(''):'<span class="dim">no paper/demo/live accounts yet (shadow only)</span>'}
+async function setMode(bot,to){const r=await api('/api/control',{action:'mode',bot,to});toast(r.msg||r.error);if(r.approval)tabTo('appr');load()}
+async function ctl(action,bot){const r=await api('/api/control',{action,bot});toast(r.msg||r.error);if(r.approval)tabTo('appr');load()}
+$('kill').onclick=async()=>{if(Date.now()-killArm>4000){killArm=Date.now();toast('Tap again to halt the desk');return}
+ const r=await api('/api/control',{action:'kill_all'});toast(r.msg);load()};
+
+function renderAppr(){
+ const L=S.approvals;$('apprList').innerHTML=L.length?L.map(a=>`<div class="card"><div class="row"><h1 style="font-size:17px">${esc(a.title)}</h1><span class="pill warn">${esc(a.kind)}</span></div>
+ <p class="dim small">${esc(a.detail)}</p><p class="small mono dim">${esc(JSON.stringify(a.payload))} · from ${esc(a.source)}</p>
+ <input id="ap_${a.id}" placeholder="Type APPROVE" autocapitalize="characters" autocomplete="off">
+ <div class="grid2"><button class="primary" onclick="decide('${a.id}',true)">Approve</button><button onclick="decide('${a.id}',false)">Reject</button></div></div>`).join('')
+ :'<div class="card dim">Nothing waiting for you.</div>'}
+async function decide(id,ok){const r=await api('/api/approve',{id,approve:ok,text:ok?$('ap_'+id).value:''});toast(r.msg);load()}
+
+async function renderLog(){
+ const d=await api('/api/decisions?n=30');
+ $('decList').innerHTML=(d.decisions||[]).map(x=>{const p=x.policy||{};const ans=x.answers||{};
+  const bits=Object.entries(ans).slice(0,6).map(([k,v])=>{const pv=v.p!=null?v.p:v.p_pick;const lab=v.pick?`${k}:${v.pick}`:k;
+   return `<div class="row small"><span>${esc(lab)}</span><span class="mono">${fmt(pv)}</span></div><div class="bar"><i style="width:${(pv||0)*100}%"></i></div>`}).join('');
+  return `<div class="item"><div class="row"><b>${esc(x.bot)}</b><span class="pill ${p.action&&p.action!=='hold'?'good':''}">${esc(p.action||x.verdict||'')}</span></div>
+  <div class="small dim mono">${new Date(x.ts*1000).toLocaleTimeString()} ${esc(x.ticker||'')} ${x.latency_ms!=null?x.latency_ms+'ms':''}</div>
+  ${p.reasons?`<div class="small dim">${esc(p.reasons.join('; '))}</div>`:''}<div style="margin-top:6px">${bits}</div></div>`}).join('')||'<span class="dim">No decisions yet.</span>';
+ $('vetoList').innerHTML=(d.vetoes||[]).map(v=>`<div class="item small"><b>${esc(v.check)}</b> <span class="dim">${esc(v.bot)} ${esc(v.ticker)}</span><div class="dim">${esc(v.message)}</div></div>`).join('')||'<span class="dim">None.</span>';
+ $('tradeList').innerHTML=(d.trades||[]).map(t=>`<div class="item small"><div class="row"><b>${esc(t.bot)} ${esc(t.ticker)}</b><span class="mono">${t.pnl_after_fees!=null?(t.pnl_after_fees>=0?'+':'')+fmt(t.pnl_after_fees):esc(t.session_end||t.rule||'')}</span></div>
+  <div class="dim">${esc(t.mode)} · ${esc(t.rule||t.session_end||'')} · ${Math.round((t.held_s||0)/60)}m</div></div>`).join('')||'<span class="dim">None.</span>'}
+
+function relChart(bins){const W=300,H=110,P=18;const x=v=>P+v*(W-2*P),y=v=>H-P-v*(H-2*P);
+ let s=`<svg viewBox="0 0 ${W} ${H}" width="100%"><line x1="${x(0)}" y1="${y(0)}" x2="${x(1)}" y2="${y(1)}" stroke="#39414c" stroke-dasharray="3 3"/>`;
+ s+=bins.map(b=>`<circle cx="${x(b.pred)}" cy="${y(b.freq)}" r="${Math.min(8,2+Math.sqrt(b.n))}" fill="#7cc4ff" fill-opacity=".75"/>`).join('');
+ s+=`<text x="${P}" y="${H-3}">predicted →</text><text x="2" y="10">actual</text></svg>`;return s}
+async function renderRep(){
+ const r=await api('/api/reports');$('daily').textContent=r.daily||'';
+ const c=r.calibration;const keys=c&&c.keys?Object.entries(c.keys):[];
+ $('cal').innerHTML=keys.length?keys.map(([k,v])=>`<div class="item"><div class="row small"><b>${esc(k)}</b><span class="mono">n ${v.n} · Brier ${fmt(v.brier,3)} vs ${fmt(v.brier_climatology,3)}</span></div>${relChart(v.bins)}</div>`).join('')
+  :'<span class="dim small">Builds after ~30 minutes of judged decisions. Each answer is checked against what the market did next.</span>';
+ $('seatReports').innerHTML=(r.seats||[]).map(s=>`<div class="card"><h2>${esc(s.name)}</h2><pre>${esc(s.text)}</pre></div>`).join('')}
+$('recal').onclick=async()=>{const r=await api('/api/control',{action:'rebuild_calibration'});toast(r.msg);renderRep();load()};
+$('ask').onclick=async()=>{const r=await api('/api/ask_seat',{seat:$('seat').value,prompt:$('seatQ').value});toast(r.msg);$('seatQ').value=''};
+
+function renderSet(){
+ $('keyState').innerHTML=`<b>Anthropic</b><span>${S.judge&&S.judge.has_key?'set':'missing'}</span><b>Kalshi</b><span>${S.keys.kalshi?'set':'not set'}</span><b>Kalshi demo</b><span>${S.keys.kalshi_demo?'set':'not set'}</span>`;
+ $('url').textContent=S.public_url||'–';$('up').textContent=Math.round(S.uptime_s/60)+' min'}
+$('saveKeys').onclick=async()=>{const b={anthropic_key:ak.value,kalshi_key_id:kid.value,kalshi_pem:kpem.value,kalshi_demo_key_id:did.value,kalshi_demo_pem:dpem.value};
+ const r=await api('/api/keys',b);toast(r.ok?('Saved: '+(r.saved||[]).join(', ')):r.error);if(r.ok)['ak','kid','kpem','did','dpem'].forEach(i=>$(i).value='');load()};
+$('upd').onclick=async()=>{const r=await api('/api/control',{action:'update_code'});toast(r.msg)};
+
+load();setInterval(()=>{if(!document.hidden&&(tab==='desk'||tab==='appr'))load()},5000);
+</script></body></html>

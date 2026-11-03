@@ -1,0 +1,146 @@
+# Trading desk config. Thresholds and limits live here, not in prompts.
+# Changes to anything under risk: or bots.*.mode go through APPROVE on the dashboard
+# (they are written to <data>/overrides.yaml, which is merged on top of this file).
+
+desk:
+  mode_ceiling: live          # highest rung any bot may run at: shadow | paper | demo | live
+  timezone: America/Los_Angeles
+  daily_summary_hour: 8       # local hour the daily summary is pushed
+
+venue:
+  name: kalshi
+  rest_prod: https://external-api.kalshi.com/trade-api/v2
+  rest_prod_alt: https://api.elections.kalshi.com/trade-api/v2
+  rest_demo: https://external-api.demo.kalshi.co/trade-api/v2
+  poll_seconds: 10            # orderbook refresh for an active market
+  trades_poll_seconds: 30
+  universe_refresh_seconds: 120
+  universe_series: [KXBTCD, KXETHD]
+
+underlying:                   # spot feed used by code for fair value (public, no key)
+  source: coinbase
+  products: {KXBTCD: BTC-USD, KXBTC: BTC-USD, KXBTC15M: BTC-USD, KXETHD: ETH-USD, KXETH: ETH-USD}
+  poll_seconds: 30
+
+judge:
+  url: http://127.0.0.1:8701
+  model: claude-haiku-5-5
+  pinned_version: ""          # empty = pin to the first version that answers; mismatch vetoes orders
+  mode: batched               # batched = one call per battery; isolated = one call per question (costs more)
+  deadline_ms: 9000           # no answer by then = hold
+  max_tokens: 600
+  daily_budget_usd: 0.10      # judge + seats combined; desk holds when hit
+  consecutive_errors_halt: 5
+  pricing_per_mtok:           # Claude Haiku 5.5 list prices
+    input: 0.10
+    output: 0.50
+    cache_write: 0.125
+    cache_read: 0.01
+
+calibration:
+  min_samples: 50             # Platt scaling only after this many labelled answers
+  apply_requires_approve: true
+
+bots:
+  gambler:
+    enabled: true
+    mode: shadow              # rung: shadow -> paper -> demo -> live
+    decision_every_s: 300
+    contracts: 5              # fixed size from rules, never from model confidence
+    take_profit_c: 6
+    stop_c: 5
+    stop_buffer_c: 1          # stop goes beyond the recent swing low/high, not at a round number
+    exit_minutes_before_close: 20
+    max_hold_minutes: 90
+    volume_exit_ratio: 0.2    # last-30m volume below 20% of its pace -> close within 60s
+  house:
+    enabled: true
+    mode: shadow
+    scan_every_s: 600
+    judge_every_s: 600
+    judge_ttl_s: 900          # answers older than this are stale -> pull quotes
+    quote_contracts: 5
+    max_inventory: 15
+    min_half_spread_c: 1
+    vol_mult: 0.8
+    inventory_skew_c: 0.4     # cents of skew per contract of inventory
+    band_c: 8                 # range guard half-width around session start mid
+    stop_minutes_before_close: 30
+    requote_min_change_c: 1
+
+policy:
+  gambler:
+    trend_min: 0.50
+    setup_ge2_min: 0.55
+    action_conf_min: 0.60
+    worth_min: 0.55
+    exec_degraded_max: 0.50
+    min_model_edge_c: 3       # code-side fair value edge required in the same direction
+  house:
+    breakout_pause: 0.40
+    toxic_widen: 0.50
+    toxic_pull: 0.70
+    env_ge2_min: 0.40
+    volume_alive_min: 0.30
+  scan:
+    worth_min: 0.50
+
+risk:
+  max_order_contracts: 10
+  max_position_contracts: 20
+  max_total_exposure_usd: 25
+  daily_loss_limit_usd: 5     # halts the desk; resuming needs APPROVE
+  min_edge_over_fees_c: 1     # taker entries: code edge must beat fees by this much per contract
+  min_quote_edge_c: 0.5       # maker quotes: distance from mid minus adverse-selection estimate
+  max_state_age_s: 30
+  price_min: 0.03
+  price_max: 0.97
+  balance_reserve_usd: 2
+
+funnel:
+  max_spread_c: 4
+  min_volume_24h: 500
+  min_open_interest: 200
+  min_minutes_to_close: 45
+  max_minutes_to_close: 1440
+  price_floor: 0.08
+  price_ceiling: 0.92
+  depth_check_top_k: 6
+  min_top3_depth: 30
+  judge_top_n: 4
+  house_min_spread_c: 1
+
+bench_ttl_minutes:            # reason -> how long a rejected market stays benched
+  spread_wide: 15
+  low_volume: 60
+  low_open_interest: 60
+  price_tail: 30
+  thin_book: 20
+  no_edge: 10
+  no_fair_value: 30
+  judge_no: 30
+  too_early: 20
+  volume_dead: 120
+  toxic: 30
+  breakout: 30
+  closing_soon: 100000
+  malformed: 100000
+
+seats:
+  enabled: true
+  model: claude-haiku-5-5
+  review_model: claude-haiku-5-5   # set to claude-opus-5-5 for the weekly review if budget allows
+  max_turns: 10
+  budget_per_run_usd: 0.01
+  review_budget_usd: 0.03
+  schedule:                         # local time
+    risk: "07:55"
+    exit: "07:58"
+    head: "08:00"
+    search_weekday: 0               # Monday
+    search: "07:30"
+    review_weekday: 6               # Sunday
+    review: "18:00"
+
+notify:
+  ntfy_server: https://ntfy.sh
