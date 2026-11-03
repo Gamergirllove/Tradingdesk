@@ -154,4 +154,8 @@ sleep 2
 systemctl restart desk-engine desk-seats
 systemctl start desk-update.path
 systemctl is-active --quiet desk-tunnel || systemctl start desk-tunnel
+# report the dashboard link on the serial console (readable by the project owner with gcloud)
+for i in $(seq 1 100); do [ -s $DATA/public_url ] && break; sleep 3; done
+{ echo "DESK_URL=$(cat $DATA/public_url 2>/dev/null)"
+  [ -f $DATA/setup_code ] && echo "DESK_SETUP_CODE=$(cat $DATA/setup_code)"; } > /dev/ttyS0 2>/dev/null || true
 echo "=== done $(date -Is)"

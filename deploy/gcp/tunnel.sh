@@ -2,6 +2,7 @@
 # Runs a free Cloudflare quick tunnel to the dashboard and pushes the link to your phone via ntfy.
 DATA=${DESK_DATA:-/var/lib/desk}
 LOG=$DATA/tunnel.log
+rm -f "$DATA/public_url"
 : > "$LOG"
 cloudflared tunnel --no-autoupdate --url http://127.0.0.1:8080 >>"$LOG" 2>&1 &
 PID=$!
