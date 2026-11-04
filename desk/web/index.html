@@ -122,13 +122,14 @@ async function ctl(action,bot){const r=await api('/api/control',{action,bot});to
 $('kill').onclick=async()=>{if(Date.now()-killArm>4000){killArm=Date.now();toast('Tap again to halt the desk');return}
  const r=await api('/api/control',{action:'kill_all'});toast(r.msg);load()};
 
+let lastAppr='';
 function renderAppr(){
- const L=S.approvals;$('apprList').innerHTML=L.length?L.map(a=>`<div class="card"><div class="row"><h1 style="font-size:17px">${esc(a.title)}</h1><span class="pill warn">${esc(a.kind)}</span></div>
+ const L=S.approvals;const h=L.length?L.map(a=>`<div class="card"><div class="row"><h1 style="font-size:17px">${esc(a.title)}</h1><span class="pill warn">${esc(a.kind)}</span></div>
  <p class="dim small">${esc(a.detail)}</p><p class="small mono dim">${esc(JSON.stringify(a.payload))} · from ${esc(a.source)}</p>
- <input id="ap_${a.id}" placeholder="Type APPROVE" autocapitalize="characters" autocomplete="off">
  <div class="grid2"><button class="primary" onclick="decide('${a.id}',true)">Approve</button><button onclick="decide('${a.id}',false)">Reject</button></div></div>`).join('')
- :'<div class="card dim">Nothing waiting for you.</div>'}
-async function decide(id,ok){const r=await api('/api/approve',{id,approve:ok,text:ok?$('ap_'+id).value:''});toast(r.msg);load()}
+ :'<div class="card dim">Nothing waiting for you.</div>';
+ if(h!==lastAppr){lastAppr=h;$('apprList').innerHTML=h}}
+async function decide(id,ok){const r=await api('/api/approve',{id,approve:ok,text:ok?'APPROVE':''});toast(r.msg);lastAppr='';load()}
 
 async function renderLog(){
  const d=await api('/api/decisions?n=30');
