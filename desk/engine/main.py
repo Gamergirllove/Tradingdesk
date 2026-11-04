@@ -284,6 +284,11 @@ class Desk:
             await asyncio.sleep(60)
 
     async def startup(self):
+        # A malformed battery is caught again before any model call on the first ask, so halts from an
+        # earlier run's in-memory disable list are cleared on restart (new code may have fixed the cause).
+        for bot, why in list(self.risk.state.halted_bots.items()):
+            if str(why).startswith("malformed battery"):
+                self.risk.clear_halt(bot)
         for bot in self.bots:
             mode = effective_mode(self.cfg, bot)
             b = self.broker_for(bot, mode)
