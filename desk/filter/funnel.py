@@ -191,8 +191,30 @@ class Funnel:
         why_by_t = {}
         for t_, stage_, why_ in rej:
             why_by_t.setdefault(t_, (stage_, why_))
+        # Always show the markets nearest the money, so there is something to look at and force even when
+        # nothing passes the first checks.
+        shown = list(top)
+        want = int(fc.get("board_size", 6))
+        if len(shown) < want:
+            have = {m["ticker"] for m in shown}
+            extra = []
+            for m in uni:
+                b_, a_ = fnum(m.get("yes_bid_dollars")), fnum(m.get("yes_ask_dollars"))
+                close = parse_ts(m.get("close_time"))
+                if m["ticker"] in have or m["ticker"] in held or not b_ or not a_ or a_ <= b_:
+                    continue
+                if not close or close - time.time() < 10 * 60:
+                    continue
+                extra.append((abs((a_ + b_) / 2 - 0.5), close, m))
+            extra.sort(key=lambda x: (x[0], x[1]))
+            for _, _, m in extra[: want - len(shown)]:
+                t_ = m["ticker"]
+                if t_ not in why_by_t:
+                    why_by_t[t_] = (1, self.bench.benched(f"{bot}:{t_}") or self._free_cut(bot, m, fc) or "not_examined")
+                shown.append(m)
+            self.watch[bot] = [m["ticker"] for m in shown]
         rows = []
-        for m in top:
+        for m in shown:
             t = m["ticker"]
             st = self.md.st(t)
             b = st.book
