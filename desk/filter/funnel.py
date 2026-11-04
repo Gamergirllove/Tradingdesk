@@ -36,6 +36,7 @@ class Funnel:
         self.held_tickers = held_tickers          # callable -> set of tickers held by any bot
         self.last_stats: dict[str, dict] = {}
         self.watch: dict[str, list[str]] = {}
+        self.board: dict[str, dict] = {}       # what the dashboard shows as possible trades
 
     def _free_cut(self, bot: str, m: dict, fc: dict) -> str | None:
         if m.get("status") not in (None, "active", "open"):
@@ -118,6 +119,7 @@ class Funnel:
 
         # stage 3: hard facts in code
         s3: list[Candidate] = []
+        feats: dict[str, dict] = {}
         for m in s2:
             t = m["ticker"]
             prod = self.und.product_for(m.get("_series"))
@@ -125,6 +127,7 @@ class Funnel:
                 await self.und.refresh(prod)
             und = self.und.features(prod)
             feat = with_fair(self.md.features(t), und, self.md.implied_vol(t, und.get("spot")))
+            feats[t] = feat
             ft, fm = await self.md.series_fee(m.get("_series", ""))
             hist_len = len(self.md.st(t).hist)
             if feat.get("ret_15m_c") is None and hist_len < 20 and bot == "gambler":
@@ -147,6 +150,7 @@ class Funnel:
                     self.bench.bench(f"{bot}:{t}", "no_edge")
                     continue
             s3.append(Candidate(t, m.get("_series", ""), feat, und, lead, ft, fm))
+            feats[t] = feat
 
         if bot == "gambler":
             s3.sort(key=lambda c: -abs(c.feat.get("model_edge_c") or 0))
@@ -184,6 +188,25 @@ class Funnel:
             else:
                 for f in finalists:
                     rej.append((f.ticker, 4, f"judge_{v.kind}"))
+        why_by_t = {}
+        for t_, stage_, why_ in rej:
+            why_by_t.setdefault(t_, (stage_, why_))
+        rows = []
+        for m in top:
+            t = m["ticker"]
+            st = self.md.st(t)
+            b = st.book
+            f = feats.get(t, {})
+            stage, why = why_by_t.get(t, (5, "picked" if pick and pick.ticker == t else "finalist"))
+            rows.append({"ticker": t, "strike_type": m.get("strike_type"), "floor": fnum(m.get("floor_strike")),
+                         "cap": fnum(m.get("cap_strike")), "close_ts": parse_ts(m.get("close_time")),
+                         "bid": b.best_bid if b else fnum(m.get("yes_bid_dollars")),
+                         "ask": b.best_ask if b else fnum(m.get("yes_ask_dollars")),
+                         "vol_24h": fnum(m.get("volume_24h_fp")), "stage": stage, "why": why,
+                         "fair": f.get("fair_yes"), "edge_c": f.get("model_edge_c"), "spread_c": f.get("spread_c"),
+                         "ret_15m_c": f.get("ret_15m_c"), "minutes_to_close": f.get("minutes_to_close"),
+                         "picked": bool(pick and pick.ticker == t)})
+        self.board[bot] = {"ts": time.time(), "lead_id": lead, "universe": len(uni), "free_cut": len(s1), "rows": rows}
         stats = {"bot": bot, "lead_id": lead, "universe": len(uni), "after_free_cut": len(s1), "examined": len(top),
                  "after_depth": len(s2), "after_facts": len(s3), "finalists": len(finalists),
                  "pick": pick.ticker if pick else None, "counts": dict(counts), "judge": jinfo,

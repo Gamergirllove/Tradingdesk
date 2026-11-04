@@ -29,6 +29,7 @@ class Intent:
     band: tuple[float, float] | None = None
     decision_id: str = ""
     tag: str = ""                # entry | exit | quote
+    forced: bool = False         # human tapped Force: skips judge-side checks, never the hard limits
 
     def to_dict(self):
         return asdict(self)
@@ -169,14 +170,16 @@ class RiskEngine:
                     checks.append(("balance", cost <= available_usd - rk["balance_reserve_usd"],
                                    f"cost {cost:.2f} > available {available_usd:.2f} - reserve"))
             fee = kalshi_fee(it.price, it.count, it.fee_type, it.fee_mult, maker=it.post_only) / max(it.count, 1) * 100
-            if it.expected_edge_c is not None:
+            if it.forced:
+                pass
+            elif it.expected_edge_c is not None:
                 need = rk.get("min_quote_edge_c", 0.5) if it.tag == "quote" else rk["min_edge_over_fees_c"]
                 checks.append(("economics", it.expected_edge_c >= fee + need,
                                f"edge {it.expected_edge_c:.2f}c < fees {fee:.2f}c + {need}c"))
             else:
                 checks.append(("economics", False, "no code-side edge estimate"))
             pin = self.state.pinned_version
-            if it.model_version is not None:
+            if it.model_version is not None and not it.forced:
                 checks.append(("model_version", (not pin) or it.model_version == pin,
                                f"judge answered as {it.model_version}, thresholds tuned on {pin}"))
             if it.band and it.tag == "quote":

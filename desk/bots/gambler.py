@@ -76,6 +76,7 @@ class Gambler:
         maybe_pin(self.d, v)
         dec = rules.gambler(v.answers, s, self.d.cfg["policy"]["gambler"], self.d.cal)
         rec["policy"] = {"action": dec.action, "reasons": dec.reasons, "scores": dec.scores}
+        self._board_judged(t, s, v, dec)
         if dec.action == "hold":
             logs.write("decisions", rec)
             if any(x.startswith("worth") for x in dec.reasons):
@@ -110,6 +111,92 @@ class Gambler:
                     best_bid=feat["bid"], best_ask=feat["ask"], decision_id=did, tag="entry")
         rec["intent"] = it.to_dict()
         await self.place_entry(it, mode, rec, feat)
+
+    def _board_judged(self, ticker, snapshot, v, dec):
+        """Attach the judged logic trace to the board row the dashboard shows."""
+        pol = self.d.cfg["policy"]["gambler"]
+        sc = dec.scores
+        act = sc.get("action")
+        flow = sc.get("flow_favors_yes")
+        flow_side = None if flow is None else (flow if act != "buy_no" else 1 - flow)
+        gates = [
+            {"k": "edge", "label": "Fair value edge", "v": sc.get("model_edge_c"), "unit": "c",
+             "ok": sc.get("model_edge_c") is not None and abs(sc["model_edge_c"]) >= pol["min_model_edge_c"],
+             "need": f"±{pol['min_model_edge_c']}c"},
+            {"k": "flow", "label": "Spot order flow", "v": flow_side, "ok": flow_side is not None and flow_side >= pol.get("flow_min", 0.55),
+             "need": f"{pol.get('flow_min', 0.55):.2f}"},
+            {"k": "regime", "label": "Trending", "v": sc.get("trend"), "ok": (sc.get("trend") or 0) >= pol["trend_min"],
+             "need": f"{pol['trend_min']:.2f}"},
+            {"k": "setup", "label": "Setup ≥ 2", "v": sc.get("setup_ge2"), "ok": (sc.get("setup_ge2") or 0) >= pol["setup_ge2_min"],
+             "need": f"{pol['setup_ge2_min']:.2f}"},
+            {"k": "action", "label": f"Action {act or '?'}", "v": sc.get("action_conf"),
+             "ok": act in ("buy_yes", "buy_no") and (sc.get("action_conf") or 0) >= pol["action_conf_min"],
+             "need": f"{pol['action_conf_min']:.2f}"},
+            {"k": "worth", "label": "Worth it", "v": sc.get("worth"), "ok": (sc.get("worth") or 0) >= pol["worth_min"],
+             "need": f"{pol['worth_min']:.2f}"},
+            {"k": "exec", "label": "Clean fills", "v": None if sc.get("exec_degraded") is None else 1 - sc["exec_degraded"],
+             "ok": (sc.get("exec_degraded") if sc.get("exec_degraded") is not None else 1) <= pol["exec_degraded_max"],
+             "need": f"{1 - pol['exec_degraded_max']:.2f}"},
+        ]
+        b = self.fx.board.get(NAME)
+        if not b:
+            return
+        for row in b["rows"]:
+            if row["ticker"] == ticker:
+                row.update({"judged": True, "judge": v.backend, "action": dec.action, "reasons": dec.reasons,
+                            "gates": gates, "ts_judged": time.time()})
+
+    async def force(self, ticker: str, side_word: str, seen_price: float | None = None,
+                    tolerance: float = 0.02) -> tuple[bool, str]:
+        """Human override: open a trade the judge didn't. Hard limits still apply."""
+        if side_word not in ("yes", "no"):
+            return False, "side must be yes or no"
+        mode = effective_mode(self.d.cfg, NAME)
+        if self.d.book.held(NAME):
+            return False, "Close the open trade first (one trade at a time)"
+        if self.d.broker_for(NAME, mode) is None:
+            return False, f"The Gambler is in {mode}. Move it to paper or higher to place trades"
+        md = self.d.md_for(mode)
+        book = await md.refresh_book(ticker, min_interval=1)
+        if book is None or book.mid is None:
+            return False, "No two-sided price on that market right now"
+        meta = md.st(ticker).meta
+        ft, fm = await md.series_fee(meta.get("_series") or ticker.split("-")[0])
+        side = "bid" if side_word == "yes" else "ask"
+        px = round(book.best_ask if side == "bid" else book.best_bid, 2)
+        held_px = px if side == "bid" else round(1 - px, 2)          # what one contract of your side costs
+        if seen_price is not None and held_px > seen_price + tolerance + 1e-9:
+            return False, f"Price moved to {round(held_px * 100)}¢ (you saw {round(seen_price * 100)}¢). Nothing bought"
+        count = await self.size(mode, side, px, ft, fm)
+        if count < 1:
+            return False, "Stake is too small for one contract"
+        feat = md.features(ticker)
+        did = f"force_{int(time.time())}"
+        it = Intent(bot=NAME, ticker=ticker, side=side, count=float(count), price=px, tif="immediate_or_cancel",
+                    fee_type=ft, fee_mult=fm, state_ts=md.st(ticker).book_ts, best_bid=book.best_bid,
+                    best_ask=book.best_ask, decision_id=did, tag="entry", forced=True)
+        rec = {"bot": NAME, "decision_id": did, "lead_id": did, "ticker": ticker, "mode": mode, "verdict": "forced",
+               "policy": {"action": f"buy_{side_word}", "reasons": ["forced from dashboard"]},
+               "sizing": {"pct_equity": self.cfg.get("size_pct_equity"), "count": count, "tp": self.tp_price(side, px)},
+               "intent": it.to_dict(), "backend": "human"}
+        self.mdx = md
+        await self.place_entry(it, mode, rec, feat)
+        lock = self.d.book.held(NAME)
+        if lock:
+            return True, f"Bought {'YES' if side == 'bid' else 'NO'} x{lock['qty']:.0f} at {lock['entry']:.2f}"
+        return False, (rec.get("risk") or {}).get("why") or (rec.get("ack") or {}).get("message") or "not filled"
+
+    def control(self, action: str) -> tuple[bool, str]:
+        lock = self.d.book.held(NAME)
+        if not lock:
+            return False, "No open trade"
+        if action == "stop":
+            self.d.book.update(NAME, manual_stop=True)
+            return True, "Closing the trade now"
+        if action in ("ride", "unride"):
+            self.d.book.update(NAME, ride=action == "ride")
+            return True, "Riding: take-profit off, stop-loss stays" if action == "ride" else "Take-profit back on"
+        return False, "unknown action"
 
     def tp_price(self, side: str, entry: float) -> float:
         """+take_profit_pct on the contract you hold. YES at 0.40 -> 0.42. NO bought at YES 0.60 (NO 0.40) -> YES 0.58."""
@@ -196,7 +283,9 @@ class Gambler:
             self.status = {"state": "idle", "mode": mode}
             return
         await self._ensure_tp(lock, pos, broker, book, opens, mode)
-        if book is None or book.mid is None:
+        if lock.get("manual_stop"):
+            rule = "manual_stop"
+        elif book is None or book.mid is None:
             self.stale_reads += 1
             if self.stale_reads <= 2:
                 return
@@ -204,8 +293,8 @@ class Gambler:
         else:
             self.stale_reads = 0
             rule = self._exit_rule(lock, book)
-        self.status = {"state": "in_position", "mode": mode, "ticker": t, "qty": pos.qty,
-                       "entry": lock.get("entry"), "stop": lock.get("stop"), "tp": lock.get("tp"),
+        self.status = {"state": "riding" if lock.get("ride") else "in_position", "mode": mode, "ticker": t,
+                       "qty": pos.qty, "entry": lock.get("entry"), "stop": lock.get("stop"), "tp": lock.get("tp"),
                        "mark": book.mid if book else None}
         if not rule:
             return
@@ -216,6 +305,13 @@ class Gambler:
         long_yes = pos.qty > 0
         side = "ask" if long_yes else "bid"
         mine = [o for o in opens if o.get("order_id") == lock.get("tp_order")]
+        if lock.get("ride"):
+            for o in mine:
+                await broker.cancel(o["order_id"], lock["ticker"])
+            if lock.get("tp_order"):
+                self.d.book.update(NAME, tp_order=None)
+                lock["tp_order"] = None
+            return
         if mine and abs(mine[0].get("remaining", 0) - abs(pos.qty)) < 1e-9:
             return
         for o in mine:
@@ -245,13 +341,16 @@ class Gambler:
         exit_px = book.best_bid if long_yes else book.best_ask
         if exit_px is None:
             return "no_exit_price"
-        if long_yes and exit_px >= lock["tp"] or (not long_yes and exit_px <= lock["tp"]):
+        ride = bool(lock.get("ride"))
+        if not ride and (long_yes and exit_px >= lock["tp"] or (not long_yes and exit_px <= lock["tp"])):
             return "take_profit"
         if long_yes and exit_px <= lock["stop"] or (not long_yes and exit_px >= lock["stop"]):
             return "stop"
         mtc = f.get("minutes_to_close")
         if mtc is not None and mtc <= c["exit_minutes_before_close"]:
             return "time_to_close"
+        if ride:
+            return None
         if time.time() - lock["opened"] > c["max_hold_minutes"] * 60:
             return "max_hold"
         ratio = f.get("vol_30m_vs_pace")

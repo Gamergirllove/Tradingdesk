@@ -336,3 +336,81 @@ def test_backfill_seeds_history():
     n = asyncio.run(md.backfill("KXBTCD-26NOV0417-T80000"))
     assert n == 60 and len(md.st("KXBTCD-26NOV0417-T80000").hist) == 60
     assert asyncio.run(md.backfill("KXBTCD-26NOV0417-T80000")) == 0        # once per ticker
+
+
+def test_force_ride_stop_paper():
+    from desk.bots.gambler import Gambler
+    from desk.engine.main import Desk
+    from desk.venues.kalshi import Book as KB
+    d = Desk()
+    d.cfg["bots"]["gambler"]["mode"] = "paper"
+    g = d.bots["gambler"]
+    book = KB("KXBTCD-X-T1", time.time(), bids=[(0.49, 500)], asks=[(0.50, 500)])
+
+    async def fake_refresh(t, min_interval=0):
+        st = d.md.st(t)
+        st.book, st.book_ts = KB(t, time.time(), book.bids, book.asks), time.time()
+        return st.book
+
+    async def fake_fee(series):
+        return "quadratic", 1.0
+    d.md.refresh_book = fake_refresh
+    d.md.series_fee = fake_fee
+
+    async def go():
+        ok, msg = await g.force("KXBTCD-X-T1", "yes")
+        assert ok, msg
+        lock = d.book.held("gambler")
+        assert lock["side"] == "bid" and lock["entry"] == 0.50 and lock["tp"] == 0.53
+        ok2, _ = await g.force("KXBTCD-X-T1", "no")
+        assert not ok2                                         # one trade at a time
+        g.mdx = d.md
+        await g.manage(d.book.held("gambler"), "paper")
+        br = d.broker_for("gambler", "paper")
+        assert any(o["price"] == 0.53 for o in await br.open_orders("KXBTCD-X-T1"))
+        assert g.control("ride")[0]
+        await g.manage(d.book.held("gambler"), "paper")
+        assert not await br.open_orders("KXBTCD-X-T1")        # take-profit pulled while riding
+        book.bids[:] = [(0.60, 500)]                            # through the old target: rider keeps holding
+        await g.manage(d.book.held("gambler"), "paper")
+        assert d.book.held("gambler") is not None
+        assert g.control("stop")[0]
+        await g.manage(d.book.held("gambler"), "paper")
+        assert d.book.held("gambler") is None and (await br.position("KXBTCD-X-T1")).qty == 0
+        tr = [r for r in logs.read("trades") if r.get("bot") == "gambler"][-1]
+        assert tr["rule"] == "manual_stop" and tr["pnl_after_fees"] > 0
+    asyncio.run(go())
+
+
+def test_force_respects_hard_limits():
+    from desk.engine.main import Desk
+    d = Desk()                                                   # gambler in shadow
+    ok, msg = asyncio.run(d.bots["gambler"].force("KXBTCD-X-T1", "yes"))
+    assert not ok and "shadow" in msg
+    r = RiskEngine(load_config(), "America/Los_Angeles")
+    r.halt("loss limit")
+    it = Intent(bot="gambler", ticker="T", side="bid", count=5, price=0.5, forced=True, state_ts=time.time())
+    assert not r.check(it, 0, 0, 100)[0]                         # a halt still blocks forced trades
+    r.clear_halt()
+    assert r.check(it, 0, 0, 100)[0]                             # no edge estimate needed when forced
+    assert not r.check(Intent(**{**it.to_dict(), "count": 9999}), 0, 0, 100000)[0]
+
+
+def test_force_refuses_if_price_moved():
+    from desk.engine.main import Desk
+    from desk.venues.kalshi import Book as KB
+    d = Desk()
+    d.cfg["bots"]["gambler"]["mode"] = "paper"
+
+    async def fake_refresh(t, min_interval=0):
+        st = d.md.st(t)
+        st.book, st.book_ts = KB(t, time.time(), [(0.86, 500)], [(0.87, 500)]), time.time()
+        return st.book
+
+    async def fake_fee(series):
+        return "quadratic", 1.0
+    d.md.refresh_book, d.md.series_fee = fake_refresh, fake_fee
+    ok, msg = asyncio.run(d.bots["gambler"].force("KXBTCD-X-T1", "yes", 0.78))
+    assert not ok and "moved to 87" in msg and d.book.held("gambler") is None
+    ok, msg = asyncio.run(d.bots["gambler"].force("KXBTCD-X-T1", "no", 0.14))       # NO costs 14c, saw 14c
+    assert ok, msg

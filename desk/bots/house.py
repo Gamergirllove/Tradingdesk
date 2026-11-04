@@ -127,6 +127,9 @@ class House:
         pos = await broker.position(t) if broker else None
         inv = pos.qty if pos else 0.0
         self._track_fills(inv, feat["mid"])
+        if lock.get("manual_stop"):
+            await self.end(lock, broker, mode, "stopped from dashboard", bench_reason=None)
+            return
         blocked = self.d.risk.blocked(NAME)
         if blocked:
             await self.end(lock, broker, mode, f"blocked: {blocked}", bench_reason=None)

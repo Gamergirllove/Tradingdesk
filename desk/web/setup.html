@@ -1,7 +1,7 @@
 <!doctype html>
 <html lang="en"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no,viewport-fit=cover">
-<meta name="theme-color" content="#0b0d10"><title>Desk setup</title><link rel="stylesheet" href="/static/base.css"></head>
+<meta name="theme-color" content="#050a12"><title>Desk setup</title><link href="https://fonts.googleapis.com/css2?family=Barlow:wght@400;500;600&family=Chakra+Petch:wght@500;600;700&display=swap" rel="stylesheet"><link rel="stylesheet" href="/static/base.css"></head>
 <body><div class="wrap">
 <div class="card"><h1>Set up the desk</h1>
 <p class="dim small">The 6-digit setup code came in the ntfy notification with this link. Keys you paste here stay on your server. The desk starts in shadow mode: it watches and logs, it never places an order.</p>
@@ -20,10 +20,10 @@
 <p id="msg" class="small" style="margin-top:12px"></p></div>
 <script>
 tog.onclick=()=>{kal.classList.toggle('hide');tog.textContent=kal.classList.contains('hide')?'Show':'Hide'};
-go.onclick=async()=>{msg.style.color='var(--dim)';if(pw.value!==pw2.value){msg.style.color='var(--bad)';msg.textContent='Passwords differ';return}
+go.onclick=async()=>{msg.style.color='var(--mist)';if(pw.value!==pw2.value){msg.style.color='var(--red)';msg.textContent='Passwords differ';return}
 go.disabled=true;msg.textContent='Checking keys…';
 const body={code:code.value,password:pw.value,anthropic_key:ak.value,kalshi_key_id:kid.value,kalshi_pem:kpem.value,kalshi_demo_key_id:did.value,kalshi_demo_pem:dpem.value};
 const r=await fetch('/setup',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify(body)});const j=await r.json();go.disabled=false;
-if(j.ok){msg.style.color='var(--good)';msg.textContent='Saved: '+(j.saved||[]).join(', ')+'. Opening the desk…';setTimeout(()=>location.href='/',1500)}
-else{msg.style.color='var(--bad)';msg.textContent=j.error||'failed'}}
+if(j.ok){msg.style.color='var(--teal)';msg.textContent='Saved: '+(j.saved||[]).join(', ')+'. Opening the desk…';setTimeout(()=>location.href='/',1500)}
+else{msg.style.color='var(--red)';msg.textContent=j.error||'failed'}}
 </script></body></html>

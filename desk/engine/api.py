@@ -68,6 +68,31 @@ async def status_payload(desk) -> dict:
     pos = {}
     for k, b in list(desk.brokers.items()):
         pos[k] = {t: p.__dict__ for t, p in (await b.positions()).items()}
+    for name in bots:
+        lk = bots[name]["lock"]
+        if lk and lk.get("entry") is not None:
+            bk = desk.md_for(lk.get("mode", "paper")).st(lk["ticker"]).book
+            if bk and bk.mid is not None:
+                long_yes = lk.get("side") == "bid"
+                ex = bk.best_bid if long_yes else bk.best_ask
+                qty = lk.get("qty", 0)
+                lk = dict(lk, mark=ex, bid=bk.best_bid, ask=bk.best_ask,
+                          upnl=round(((ex - lk["entry"]) if long_yes else (lk["entry"] - ex)) * qty, 4))
+                bots[name]["lock"] = lk
+    boards = {}
+    for name in bots:
+        md = desk.md_for(effective_mode(desk.cfg, name))
+        b = desk.funnel_for(effective_mode(desk.cfg, name)).board.get(name)
+        if b:
+            rows = []
+            for row in b.get("rows", []):
+                st = md.st(row["ticker"])
+                if st.book and st.book.mid is not None:      # live quotes, not the ones from the last scan
+                    row = dict(row, bid=st.book.best_bid, ask=st.book.best_ask, quote_age_s=round(time.time() - st.book_ts))
+                    if row.get("minutes_to_close") is not None and row.get("close_ts"):
+                        row["minutes_to_close"] = round((row["close_ts"] - time.time()) / 60, 1)
+                rows.append(row)
+            boards[name] = dict(b, rows=rows)
     return {
         "ts": time.time(), "uptime_s": int(time.time() - desk.started), "bots": bots,
         "risk": desk.risk.state.__dict__, "equity": desk.equity, "positions": pos,
@@ -76,6 +101,9 @@ async def status_payload(desk) -> dict:
         "funnel": desk.funnel.last_stats, "public_url": desk.public_url(), "ladder": LADDER,
         "mode_ceiling": desk.cfg["desk"]["mode_ceiling"],
         "judge_backend": desk.cfg["judge"].get("backend", "claude"),
+        "boards": boards, "spot": desk.flow.features() if desk.flow else {},
+        "paper_bankroll": desk.cfg["desk"].get("paper_bankroll", 50),
+        "gambler_cfg": {k: desk.cfg["bots"]["gambler"].get(k) for k in ("size_pct_equity", "take_profit_pct", "stop_c")},
         "live_profit": desk.live_profit(),
         "milestone": desk.cfg["desk"].get("ai_credit_milestone_usd", 5),
     }
@@ -116,7 +144,7 @@ def create_app(desk) -> FastAPI:
     @app.get("/manifest.webmanifest")
     async def manifest():
         return JSONResponse({"name": "Trading Desk", "short_name": "Desk", "display": "standalone",
-                             "background_color": "#0b0d10", "theme_color": "#0b0d10", "start_url": "/"})
+                             "background_color": "#050a12", "theme_color": "#050a12", "start_url": "/"})
 
     @app.post("/setup")
     async def do_setup(req: Request):
@@ -249,6 +277,35 @@ def create_app(desk) -> FastAPI:
             (data_dir() / "update_requested").write_text(str(time.time()))
             return {"ok": True, "msg": "update requested; the box pulls and restarts within 2 minutes"}
         return JSONResponse({"ok": False, "error": "unknown action"}, status_code=400)
+
+    @app.post("/api/force")
+    async def api_force(req: Request):
+        if not authed(req):
+            return deny()
+        b = await req.json()
+        seen = b.get("seen_price")
+        ok, msg = await desk.bots["gambler"].force(str(b.get("ticker", "")), str(b.get("side", "")),
+                                                   float(seen) if seen is not None else None)
+        logs.write("events", {"kind": "force_trade", "ticker": b.get("ticker"), "side": b.get("side"), "ok": ok, "msg": msg})
+        return {"ok": ok, "msg": msg}
+
+    @app.post("/api/position")
+    async def api_position(req: Request):
+        if not authed(req):
+            return deny()
+        b = await req.json()
+        bot, act = b.get("bot", "gambler"), b.get("action")
+        if bot == "house":
+            if act != "stop" or not desk.book.held("house"):
+                return {"ok": False, "msg": "No House session to stop"}
+            desk.book.update("house", manual_stop=True)
+            ok, msg = True, "Ending the House session"
+        elif bot == "gambler":
+            ok, msg = desk.bots["gambler"].control(str(act))
+        else:
+            return JSONResponse({"ok": False, "error": "unknown bot"}, status_code=400)
+        logs.write("events", {"kind": "position_control", "bot": bot, "action": act, "ok": ok})
+        return {"ok": ok, "msg": msg}
 
     @app.post("/api/approve")
     async def api_approve(req: Request):
