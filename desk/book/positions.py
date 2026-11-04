@@ -67,8 +67,8 @@ class Bench:
     def _save(self):
         self.p.write_text(json.dumps(self.items))
 
-    def bench(self, key: str, reason: str, until: float | None = None):
-        mins = float(self.ttl.get(reason, 30))
+    def bench(self, key: str, reason: str, until: float | None = None, scale: float = 1.0):
+        mins = float(self.ttl.get(reason, 30)) * scale
         t = until if until else time.time() + mins * 60
         prev = self.items.get(key)
         if prev and prev["until"] >= t:

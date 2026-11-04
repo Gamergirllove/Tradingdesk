@@ -51,8 +51,12 @@ class RulesBackend:
 
         # ---------- gambler ----------
         if q.id == "regime":
+            s15, s5 = g("spot_ret_15m_bps"), g("spot_ret_5m_bps")
             if r15 is None or rv is None:
-                return {o: 1 / len(q.options) for o in q.options}
+                if s15 is None:
+                    return {o: 1 / len(q.options) for o in q.options}
+                trending = abs(s15) >= 8 and (s5 is None or s5 * s15 >= 0)      # BTC itself is moving one way
+                return _peaked(q.options, "trending" if trending else "mean_reverting", 0.65)
             trending = abs(r15) >= max(2.0, 2 * rv) and (r5 is None or r5 * r15 >= 0)
             pick = "trending" if trending else ("chaotic" if rv >= 3 else "mean_reverting")
             return _peaked(q.options, pick, 0.7)
@@ -64,7 +68,9 @@ class RulesBackend:
             if edge is None:
                 return {f"L{k}": (0.85 if k == "0" else 0.05) for k in q.levels}
             n = 0
-            n += 1 if (abs(edge) >= 3 and r15 is not None and r15 * edge > 0) else 0
+            ydir = {"rises": 1, "falls": -1}.get(s.get("yes_wins_if_spot"), 0)
+            mom = r15 if r15 is not None else ((g("spot_ret_15m_bps") or 0) * ydir)
+            n += 1 if (abs(edge) >= 3 and mom * edge > 0) else 0
             n += 1 if (sp is not None and sp <= 2) else 0
             n += 1 if ((g("minutes_to_close") or 0) >= 60) else 0
             return {f"L{k}": (0.75 if int(k) == n else 0.25 / (len(q.levels) - 1)) for k in q.levels}

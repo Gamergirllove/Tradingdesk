@@ -231,6 +231,9 @@ def test_implied_sigma_roundtrip():
     close = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(time.time() + 300 * 60))
     ladder = [{"event_ticker": "E", "strike_type": "greater", "floor_strike": 79500, "close_time": close,
                "yes_bid_dollars": f"{p - 0.005:.4f}", "yes_ask_dollars": f"{p + 0.005:.4f}"}]
+    assert event_iv(ladder, "E", 80000) is None            # a lone market can't price its own vol
+    ladder += [{"event_ticker": "E", "strike_type": "greater", "floor_strike": k, "close_time": close,
+                "yes_bid_dollars": "0.0100", "yes_ask_dollars": "0.0300"} for k in (81000, 82000)]
     assert abs(event_iv(ladder, "E", 80000) - 0.42) < 0.03
 
 
@@ -414,3 +417,15 @@ def test_force_refuses_if_price_moved():
     assert not ok and "moved to 87" in msg and d.book.held("gambler") is None
     ok, msg = asyncio.run(d.bots["gambler"].force("KXBTCD-X-T1", "no", 0.14))       # NO costs 14c, saw 14c
     assert ok, msg
+
+
+
+def test_fifteen_minute_profile():
+    from desk.config import profile
+    cfg = load_config()
+    assert cfg["venue"]["universe_series"] == ["KXBTC15M"]
+    f = profile(cfg, "funnel", "KXBTC15M")
+    assert f["min_minutes_to_close"] == 3 and f["max_minutes_to_close"] == 16 and f["price_ceiling"] >= 0.85
+    g = profile(cfg, "gambler", "KXBTC15M")
+    assert g["exit_minutes_before_close"] == 1 and g["size_pct_equity"] == 50
+    assert profile(cfg, "gambler", "KXBTCD")["exit_minutes_before_close"] == 20

@@ -17,7 +17,7 @@ venue:
   poll_seconds: 10            # orderbook refresh for an active market
   trades_poll_seconds: 30
   universe_refresh_seconds: 120
-  universe_series: [KXBTCD]    # bitcoin only
+  universe_series: [KXBTC15M]  # bitcoin 15-minute markets only
 
 underlying:                   # spot feed used by code for fair value (public, no key)
   source: coinbase
@@ -48,7 +48,7 @@ bots:
   gambler:
     enabled: true
     mode: shadow              # rung: shadow -> paper -> demo -> live
-    decision_every_s: 120
+    decision_every_s: 60
     size_pct_equity: 50       # stake per trade as % of the account, from rules, never from model confidence
     take_profit_pct: 5        # +5% on the contract held, rested as a post-only maker order (0 fee)
     stop_c: 5
@@ -57,7 +57,7 @@ bots:
     max_hold_minutes: 90
     volume_exit_ratio: 0.2    # last-30m volume below 20% of its pace -> close within 60s
   house:
-    enabled: true
+    enabled: false            # only one 15-minute market exists at a time; the Gambler gets it
     mode: shadow
     scan_every_s: 180
     judge_every_s: 600
@@ -93,7 +93,7 @@ risk:
   max_order_contracts: 500
   max_position_contracts: 500
   max_total_exposure_usd: 100
-  daily_loss_limit_usd: 5     # halts the desk; resuming needs APPROVE
+  daily_loss_limit_usd: 5     # bot losses only (trades you force by hand don't count); halts until you approve
   min_edge_over_fees_c: 1     # taker entries: code edge must beat fees by this much per contract
   min_quote_edge_c: 0.5       # maker quotes: distance from mid minus adverse-selection estimate
   max_state_age_s: 30
@@ -145,6 +145,15 @@ seats:
     search: "07:30"
     review_weekday: 6               # Sunday
     review: "18:00"
+
+series_profiles:              # per-series overrides on top of funnel / bots settings
+  KXBTC15M:                   # "BTC up in the next 15 mins?" one market every 15 minutes
+    funnel: {min_minutes_to_close: 3, max_minutes_to_close: 16, max_spread_c: 3, min_volume_24h: 0,
+             min_open_interest: 0, min_history_points: 3, bench_scale: 0.05}
+    gambler: {exit_minutes_before_close: 1, max_hold_minutes: 15}
+    house: {stop_minutes_before_close: 3}
+  KXBTCD:
+    funnel: {min_history_points: 20}
 
 spot_flow:                    # aggr-style aggregated BTC spot trades + books (BRTI venues reachable from the US)
   enabled: true

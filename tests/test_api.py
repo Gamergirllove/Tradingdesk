@@ -101,3 +101,17 @@ def test_judge_switch_and_milestone(tmp_data):
     assert json.loads((tmp_data / "milestones.json").read_text())["ai_credit"]["profit"] == 5.25
     assert any("Kalshi made" in a["title"] for a in logs.read("alerts"))
     assert c.get("/api/status").json()["live_profit"] == 5.25
+
+
+def test_manual_trades_do_not_count_toward_daily_loss(tmp_data):
+    import asyncio
+    from desk import logs
+    d, c = make()
+    logs.write("trades", {"bot": "gambler", "mode": "paper", "manual": True, "pnl_after_fees": -8.0})
+    logs.write("trades", {"bot": "gambler", "mode": "paper", "manual": False, "pnl_after_fees": -1.0})
+    assert d.manual_pnl_today("paper_gambler") == -8.0
+    d.risk.state.day_start_equity["paper_gambler"] = 50.0
+    hit, pnl = d.risk.daily_loss_breached("paper_gambler", 41.0 - d.manual_pnl_today("paper_gambler"))
+    assert not hit and pnl == -1.0                      # $9 down, but only $1 of it was the bot
+    hit, _ = d.risk.daily_loss_breached("paper_gambler", 44.0 - 0)
+    assert hit                                          # $6 lost by the bot alone trips the $5 limit

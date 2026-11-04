@@ -79,3 +79,17 @@ def effective_mode(cfg: dict, bot: str) -> str:
     if ceiling not in LADDER:
         ceiling = "shadow"
     return LADDER[min(LADDER.index(want), LADDER.index(ceiling))]
+
+
+def series_of(ticker: str | None) -> str:
+    return (ticker or "").split("-")[0]
+
+
+def profile(cfg: dict, section: str, series: str | None) -> dict:
+    """Base settings for a section ('funnel', 'gambler', 'house') with per-series overrides on top."""
+    if section == "funnel":
+        base = cfg.get("funnel", {})
+    else:
+        base = cfg.get("bots", {}).get(section, {})
+    over = (cfg.get("series_profiles", {}).get(series or "", {}) or {}).get(section, {}) or {}
+    return {**base, **over}

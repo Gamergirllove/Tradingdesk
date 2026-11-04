@@ -10,6 +10,7 @@ from collections import Counter
 from dataclasses import dataclass, field
 
 from .. import logs
+from ..config import profile
 from ..policy.rules import scan_pick
 from ..questions import scan as scanq
 from ..state.market import MarketData
@@ -38,7 +39,12 @@ class Funnel:
         self.watch: dict[str, list[str]] = {}
         self.board: dict[str, dict] = {}       # what the dashboard shows as possible trades
 
+    def _bscale(self, ticker: str) -> float:
+        """Short-lived markets get short benches (a 15-minute market can't sit out for 30 minutes)."""
+        return float(profile(self.cfg, "funnel", ticker.split("-")[0]).get("bench_scale", 1.0))
+
     def _free_cut(self, bot: str, m: dict, fc: dict) -> str | None:
+        fc = profile(self.cfg, "funnel", m.get("_series") or m.get("ticker", "").split("-")[0])
         if m.get("status") not in (None, "active", "open"):
             return "not_active"
         bid, ask = fnum(m.get("yes_bid_dollars")), fnum(m.get("yes_ask_dollars"))
@@ -89,7 +95,7 @@ class Funnel:
                 if why == "closing_soon":
                     self.bench.bench(key, why, until=parse_ts(m.get("close_time")) or None)
                 elif why in self.cfg["bench_ttl_minutes"]:
-                    self.bench.bench(key, why)
+                    self.bench.bench(key, why, scale=self._bscale(t))
                 continue
             s1.append(m)
         s1.sort(key=lambda m: -(fnum(m.get("volume_24h_fp"), 0) or 0))
@@ -113,7 +119,7 @@ class Funnel:
             if min(d_b, d_a) < fc["min_top3_depth"]:
                 rej.append((t, 2, "thin_book"))
                 counts["thin_book"] += 1
-                self.bench.bench(f"{bot}:{t}", "thin_book")
+                self.bench.bench(f"{bot}:{t}", "thin_book", scale=self._bscale(t))
                 continue
             s2.append(m)
 
@@ -130,7 +136,8 @@ class Funnel:
             feats[t] = feat
             ft, fm = await self.md.series_fee(m.get("_series", ""))
             hist_len = len(self.md.st(t).hist)
-            if feat.get("ret_15m_c") is None and hist_len < 20 and bot == "gambler":
+            need_hist = int(profile(self.cfg, "funnel", m.get("_series")).get("min_history_points", 20))
+            if feat.get("ret_15m_c") is None and hist_len < need_hist and bot == "gambler":
                 rej.append((t, 3, "too_early"))
                 counts["too_early"] += 1
                 continue
@@ -139,7 +146,7 @@ class Funnel:
                 if edge is None:
                     rej.append((t, 3, "no_fair_value"))
                     counts["no_fair_value"] += 1
-                    self.bench.bench(f"{bot}:{t}", "no_fair_value")
+                    self.bench.bench(f"{bot}:{t}", "no_fair_value", scale=self._bscale(t))
                     continue
                 px = feat["ask"] if edge > 0 else feat["bid"]
                 fee_c = kalshi_fee(px, 1, ft, fm) * 100
@@ -147,7 +154,7 @@ class Funnel:
                 if abs(edge) < self.cfg["policy"]["gambler"]["min_model_edge_c"] or net < self.cfg["risk"]["min_edge_over_fees_c"]:
                     rej.append((t, 3, "no_edge"))
                     counts["no_edge"] += 1
-                    self.bench.bench(f"{bot}:{t}", "no_edge")
+                    self.bench.bench(f"{bot}:{t}", "no_edge", scale=self._bscale(t))
                     continue
             s3.append(Candidate(t, m.get("_series", ""), feat, und, lead, ft, fm))
             feats[t] = feat
@@ -181,7 +188,7 @@ class Funnel:
                         rej.append((f.ticker, 4, "judge_no" if (v.answers.get(f"worth_{c}", {}).get("p", 0) <
                                                                 self.cfg["policy"]["scan"]["worth_min"]) else "not_best"))
                         if rej[-1][2] == "judge_no":
-                            self.bench.bench(f"{bot}:{f.ticker}", "judge_no")
+                            self.bench.bench(f"{bot}:{f.ticker}", "judge_no", scale=self._bscale(f.ticker))
                 if chosen:
                     pick = finalists[cids.index(chosen)]
                     pick.scan_answers = v.answers

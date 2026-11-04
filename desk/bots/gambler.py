@@ -5,7 +5,7 @@ import math
 import time
 
 from .. import logs
-from ..config import effective_mode
+from ..config import effective_mode, profile, series_of
 from ..policy import rules
 from ..questions.gambler import BATTERY
 from ..risk.engine import Intent
@@ -80,7 +80,7 @@ class Gambler:
         if dec.action == "hold":
             logs.write("decisions", rec)
             if any(x.startswith("worth") for x in dec.reasons):
-                self.d.bench.bench(f"{NAME}:{t}", "judge_no")
+                self.d.bench.bench(f"{NAME}:{t}", "judge_no", scale=self.fx._bscale(t))
             self.status = {"state": "hold", "mode": mode, "ticker": t, "reasons": dec.reasons}
             return
         side = "bid" if dec.action == "buy_yes" else "ask"
@@ -183,6 +183,7 @@ class Gambler:
         await self.place_entry(it, mode, rec, feat)
         lock = self.d.book.held(NAME)
         if lock:
+            self.d.book.update(NAME, manual=True)
             return True, f"Bought {'YES' if side == 'bid' else 'NO'} x{lock['qty']:.0f} at {lock['entry']:.2f}"
         return False, (rec.get("risk") or {}).get("why") or (rec.get("ack") or {}).get("message") or "not filled"
 
@@ -245,7 +246,8 @@ class Gambler:
         if ack.ok and ack.filled > 0:
             entry = ack.avg_price or it.price
             lo, hi = feat.get("lo_60m"), feat.get("hi_60m")
-            sc, buf = self.cfg["stop_c"] / 100, self.cfg["stop_buffer_c"] / 100
+            pc = profile(self.d.cfg, "gambler", series_of(it.ticker))
+            sc, buf = pc["stop_c"] / 100, pc["stop_buffer_c"] / 100
             if it.side == "bid":
                 swing = (lo - buf) if lo is not None else entry - sc
                 stop = max(entry - 2 * sc, min(entry - sc, swing))
@@ -335,7 +337,7 @@ class Gambler:
             lock["tp_order"] = ack.order_id
 
     def _exit_rule(self, lock: dict, book) -> str | None:
-        c = self.cfg
+        c = profile(self.d.cfg, "gambler", series_of(lock["ticker"]))
         f = self.mdx.features(lock["ticker"])
         long_yes = lock["side"] == "bid"
         exit_px = book.best_bid if long_yes else book.best_ask
@@ -407,6 +409,7 @@ class Gambler:
             else:
                 fees = (lock.get("entry_fee") or 0) + ((ack.fee or 0) if ack else exit_fee)
             pnl -= fees
-        logs.write("trades", {"bot": NAME, "lead_id": lock["lead_id"], "ticker": lock["ticker"], "side": lock["side"],
+        logs.write("trades", {"bot": NAME, "lead_id": lock["lead_id"], "manual": bool(lock.get("manual")),
+                              "ticker": lock["ticker"], "side": lock["side"],
                               "qty": qty, "entry": entry, "exit": exit_px, "rule": rule, "pnl_after_fees": r(pnl, 4),
                               "mode": lock.get("mode"), "held_s": round(time.time() - lock.get("opened", time.time()))})

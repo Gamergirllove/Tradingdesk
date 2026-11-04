@@ -6,7 +6,7 @@ import math
 import time
 
 from .. import logs
-from ..config import effective_mode
+from ..config import effective_mode, profile, series_of
 from ..policy import rules
 from ..questions.house import BATTERY
 from ..risk.engine import Intent
@@ -135,7 +135,7 @@ class House:
             await self.end(lock, broker, mode, f"blocked: {blocked}", bench_reason=None)
             return
         mtc = feat.get("minutes_to_close")
-        if mtc is not None and mtc <= self.cfg["stop_minutes_before_close"]:
+        if mtc is not None and mtc <= profile(self.d.cfg, "house", series_of(t))["stop_minutes_before_close"]:
             await self.end(lock, broker, mode, "closing", bench_reason="closing_soon")
             return
         lo, hi = lock["band"]
@@ -253,7 +253,7 @@ class House:
                               "mode": mode, "held_s": round(time.time() - lock.get("opened", time.time())),
                               "fills": len(self.fill_events)})
         if bench_reason:
-            self.d.bench.bench(f"{NAME}:{t}", bench_reason)
+            self.d.bench.bench(f"{NAME}:{t}", bench_reason, scale=self.fx._bscale(t))
         self.d.book.release(NAME, f"end:{reason}", lock["lead_id"])
         self.answers = None
         self.status = {"state": "idle", "mode": mode, "last_end": reason}

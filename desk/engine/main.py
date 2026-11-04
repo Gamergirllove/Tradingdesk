@@ -241,7 +241,7 @@ class Desk:
                 self.equity = eq
                 self.risk.roll_day(eq)
                 for k, e in eq.items():
-                    hit, pnl = self.risk.daily_loss_breached(k, e)
+                    hit, pnl = self.risk.daily_loss_breached(k, e - self.manual_pnl_today(k))
                     if hit:
                         for bot in self.bots:
                             if self.broker_key(bot, effective_mode(self.cfg, bot)) == k and bot not in self.risk.state.halted_bots:
@@ -287,6 +287,26 @@ class Desk:
             except Exception as e:
                 logs.write("events", {"kind": "schedule_error", "error": repr(e)[:300]})
             await asyncio.sleep(60)
+
+    def manual_pnl_today(self, broker_key: str) -> float:
+        """Profit or loss from trades you forced by hand today (closed + open), so the daily loss limit
+        only measures what the bots did."""
+        from ..util import local_day, kalshi_fee
+        mode = {"demo": "demo", "live": "live"}.get(broker_key, "paper")
+        tot = 0.0
+        for r in logs.read("trades", local_day(self.tz)):
+            if r.get("manual") and r.get("mode") == mode and r.get("pnl_after_fees") is not None:
+                if mode != "paper" or broker_key == f"paper_{r.get('bot')}":
+                    tot += float(r["pnl_after_fees"])
+        lk = self.book.held("gambler")
+        if lk and lk.get("manual") and lk.get("mode") == mode and (mode != "paper" or broker_key == "paper_gambler"):
+            bk = self.md_for(mode).st(lk["ticker"]).book
+            if bk and bk.mid is not None:
+                long_yes = lk.get("side") == "bid"
+                ex = bk.best_bid if long_yes else bk.best_ask
+                q = lk.get("qty", 0)
+                tot += ((ex - lk["entry"]) if long_yes else (lk["entry"] - ex)) * q - (lk.get("entry_fee") or 0)
+        return round(tot, 4)
 
     def live_profit(self) -> float:
         """Real money only: closed live trades and House live sessions, after fees."""

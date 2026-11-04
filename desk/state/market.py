@@ -276,8 +276,11 @@ def event_iv(listing: list[dict], event_ticker: str, spot: float | None, at: flo
         return None
     at = at or time.time()
     best = None
-    for m in listing:
-        if m.get("event_ticker") != event_ticker or m.get("strike_type") != "greater":
+    ladder = [m for m in listing if m.get("event_ticker") == event_ticker]
+    if len(ladder) < 3:
+        return None     # one market can't imply its own vol without making its edge zero by construction
+    for m in ladder:
+        if m.get("strike_type") not in ("greater", "greater_or_equal"):
             continue
         k = fnum(m.get("floor_strike"))
         b, a = fnum(m.get("yes_bid_dollars")), fnum(m.get("yes_ask_dollars"))
