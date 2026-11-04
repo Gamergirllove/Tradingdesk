@@ -44,6 +44,8 @@ class MockBackend:
                     p = _sig(abs(g("spot_ret_5m_bps")) / 10 - 1.5)
                 elif q.id == "volume_alive":
                     p = _sig(3 * (g("vol_30m_vs_pace") - 0.3)) if state.get("vol_30m_vs_pace") is not None else 0.5
+                elif q.id == "spot_up":
+                    p = _sig(g("spot_cvd_5m_btc") / 5 + 2 * g("spot_book_imb_10bps"))
                 elif q.id.startswith("worth_"):
                     p = 0.65 if q.id == "worth_A" else 0.45
                 else:

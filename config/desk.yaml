@@ -6,6 +6,7 @@ desk:
   mode_ceiling: live          # highest rung any bot may run at: shadow | paper | demo | live
   timezone: America/Los_Angeles
   daily_summary_hour: 8       # local hour the daily summary is pushed
+  paper_bankroll: 50          # starting cash for each paper bot
 
 venue:
   name: kalshi
@@ -15,7 +16,7 @@ venue:
   poll_seconds: 10            # orderbook refresh for an active market
   trades_poll_seconds: 30
   universe_refresh_seconds: 120
-  universe_series: [KXBTCD, KXETHD]
+  universe_series: [KXBTCD]    # bitcoin only
 
 underlying:                   # spot feed used by code for fair value (public, no key)
   source: coinbase
@@ -46,8 +47,8 @@ bots:
     enabled: true
     mode: shadow              # rung: shadow -> paper -> demo -> live
     decision_every_s: 300
-    contracts: 5              # fixed size from rules, never from model confidence
-    take_profit_c: 6
+    size_pct_equity: 50       # stake per trade as % of the account, from rules, never from model confidence
+    take_profit_pct: 5        # +5% on the contract held, rested as a post-only maker order (0 fee)
     stop_c: 5
     stop_buffer_c: 1          # stop goes beyond the recent swing low/high, not at a round number
     exit_minutes_before_close: 20
@@ -76,6 +77,7 @@ policy:
     worth_min: 0.55
     exec_degraded_max: 0.50
     min_model_edge_c: 3       # code-side fair value edge required in the same direction
+    flow_min: 0.55            # aggregated spot flow must favor the side taken
   house:
     breakout_pause: 0.40
     toxic_widen: 0.50
@@ -86,9 +88,9 @@ policy:
     worth_min: 0.50
 
 risk:
-  max_order_contracts: 10
-  max_position_contracts: 20
-  max_total_exposure_usd: 25
+  max_order_contracts: 500
+  max_position_contracts: 500
+  max_total_exposure_usd: 100
   daily_loss_limit_usd: 5     # halts the desk; resuming needs APPROVE
   min_edge_over_fees_c: 1     # taker entries: code edge must beat fees by this much per contract
   min_quote_edge_c: 0.5       # maker quotes: distance from mid minus adverse-selection estimate
@@ -141,6 +143,11 @@ seats:
     search: "07:30"
     review_weekday: 6               # Sunday
     review: "18:00"
+
+spot_flow:                    # aggr-style aggregated BTC spot trades + books (BRTI venues reachable from the US)
+  enabled: true
+  poll_seconds: 10
+  venues: [coinbase, kraken, bitstamp, gemini]
 
 notify:
   ntfy_server: https://ntfy.sh

@@ -140,9 +140,10 @@ class RiskEngine:
         rk = self.cfg["risk"]
         checks: list[tuple[str, bool, str]] = []
         b = self.blocked(it.bot)
-        if b and not it.reduce_only:
+        shrinking = it.reduce_only or abs(position_contracts + (it.count if it.side == "bid" else -it.count)) < abs(position_contracts)
+        if b and not shrinking:
             checks.append(("halt", False, b))
-        checks.append(("price_band", rk["price_min"] <= it.price <= rk["price_max"] or it.reduce_only,
+        checks.append(("price_band", rk["price_min"] <= it.price <= rk["price_max"] or shrinking,
                        f"price {it.price} outside [{rk['price_min']}, {rk['price_max']}]"))
         checks.append(("order_size", 0 < it.count <= rk["max_order_contracts"],
                        f"order {it.count} > max {rk['max_order_contracts']}"))
@@ -153,9 +154,11 @@ class RiskEngine:
             checks.append(("post_only_cross", it.price < it.best_ask, f"bid {it.price} would cross ask {it.best_ask}"))
         if it.post_only and it.best_bid is not None and it.side == "ask":
             checks.append(("post_only_cross", it.price > it.best_bid, f"ask {it.price} would cross bid {it.best_bid}"))
-        if not it.reduce_only:
-            signed = it.count if it.side == "bid" else -it.count
-            new_pos = position_contracts + signed
+        signed = it.count if it.side == "bid" else -it.count
+        new_pos = position_contracts + signed
+        closing = it.reduce_only or (abs(new_pos) < abs(position_contracts) and
+                                     (new_pos == 0 or (new_pos > 0) == (position_contracts > 0)))
+        if not closing:
             if abs(new_pos) > abs(position_contracts):
                 checks.append(("max_position", abs(new_pos) <= rk["max_position_contracts"],
                                f"position would be {new_pos} > {rk['max_position_contracts']}"))

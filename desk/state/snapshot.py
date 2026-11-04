@@ -28,8 +28,25 @@ def with_fair(feat: dict, und: dict, sigma: float | None = None) -> dict:
     return out
 
 
-def gambler(feat: dict, und: dict) -> dict:
+FLOW_FIELDS = ["spot_cvd_1m_btc", "spot_cvd_5m_btc", "spot_cvd_15m_btc", "spot_buy_share_5m", "spot_vol_5m_vs_60m",
+               "spot_big_net_5m", "spot_book_imb_10bps", "spot_book_imb_50bps", "flow_venues"]
+
+
+def yes_direction(strike_type: str | None) -> int:
+    """+1 if YES wins when spot rises, -1 if YES wins when spot falls, 0 if neither (range buckets)."""
+    if strike_type in ("greater", "greater_or_equal"):
+        return 1
+    if strike_type in ("less", "less_or_equal"):
+        return -1
+    return 0
+
+
+def gambler(feat: dict, und: dict, flow: dict | None = None) -> dict:
     s = {k: feat.get(k) for k in GAMBLER_FIELDS}
+    flow = flow or {}
+    for k in FLOW_FIELDS:
+        s[k] = flow.get(k)
+    s["yes_wins_if_spot"] = {1: "rises", -1: "falls"}.get(yes_direction(feat.get("strike_type")), "range")
     s["fair_yes"] = feat.get("fair_yes")
     s["model_edge_c"] = feat.get("model_edge_c")
     s["spot_ret_5m_bps"] = und.get("spot_ret_5m_bps")

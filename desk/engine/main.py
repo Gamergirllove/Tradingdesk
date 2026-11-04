@@ -22,6 +22,7 @@ from ..filter.funnel import Funnel
 from ..judge.client import JudgeClient
 from ..policy.calibration import Calibrator
 from ..risk.engine import RiskEngine
+from ..state.aggr import SpotFlow
 from ..state.market import MarketData
 from ..state.underlying import Underlying
 from ..util import local_hm
@@ -50,6 +51,8 @@ class Desk:
         self.data_client = KalshiClient(v["rest_prod"], signer=self.prod_signer, alt_base_url=v.get("rest_prod_alt"))
         self.md = MarketData(self.data_client, self.cfg)
         self.und = Underlying(self.cfg["underlying"]["products"], self.cfg["underlying"].get("poll_seconds", 30))
+        fl = self.cfg.get("spot_flow", {})
+        self.flow = SpotFlow(float(fl.get("poll_seconds", 10)), fl.get("venues")) if fl.get("enabled", True) else None
         j = self.cfg["judge"]
         self.judge = judge or JudgeClient(j["url"], secrets.desk_secret(), int(j.get("deadline_ms", 9000)),
                                           int(j.get("consecutive_errors_halt", 5)))
@@ -304,8 +307,10 @@ class Desk:
         await self.startup()
         app = create_app(self)
         server = uvicorn.Server(uvicorn.Config(app, host="127.0.0.1", port=port, log_level="warning"))
-        await asyncio.gather(server.serve(), self.data_loop(), self.bots_loop(), self.risk_loop(),
-                             self.schedule_loop())
+        loops = [server.serve(), self.data_loop(), self.bots_loop(), self.risk_loop(), self.schedule_loop()]
+        if self.flow:
+            loops.append(self.flow.run(self.stop))
+        await asyncio.gather(*loops)
 
     def ai_spend(self) -> dict:
         return {"spent": ledger.spent(tz=self.tz), "cap": self.cfg["judge"].get("daily_budget_usd"),

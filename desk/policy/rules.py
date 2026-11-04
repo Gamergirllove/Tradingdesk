@@ -33,8 +33,11 @@ def gambler(ans: dict, snap: dict, pol: dict, cal: Calibrator) -> Decision:
     worth = c("worth", _p(ans, "worth"))
     degraded = c("exec_degraded", _p(ans, "exec_degraded"))
     edge = snap.get("model_edge_c")
+    p_up = c("spot_up", _p(ans, "spot_up"))
+    ydir = {"rises": 1, "falls": -1}.get(snap.get("yes_wins_if_spot"), 0)
+    flow_yes = None if (p_up is None or ydir == 0) else (p_up if ydir > 0 else 1 - p_up)
     sc = {"trend": trend, "setup_ge2": setup_ge2, "action": act, "action_conf": conf, "worth": worth,
-          "exec_degraded": degraded, "model_edge_c": edge}
+          "exec_degraded": degraded, "model_edge_c": edge, "spot_up": p_up, "flow_favors_yes": flow_yes}
     why = []
     if None in (trend, setup_ge2, conf, worth, degraded):
         return Decision("hold", ["missing answer"], sc)
@@ -50,6 +53,13 @@ def gambler(ans: dict, snap: dict, pol: dict, cal: Calibrator) -> Decision:
         why.append(f"worth {worth:.2f}")
     if degraded > pol["exec_degraded_max"]:
         why.append(f"exec degraded {degraded:.2f}")
+    fmin = pol.get("flow_min", 0.55)
+    if flow_yes is None:
+        why.append("no spot flow read")
+    elif act == "buy_yes" and flow_yes < fmin:
+        why.append(f"spot flow favors YES only {flow_yes:.2f}")
+    elif act == "buy_no" and flow_yes > 1 - fmin:
+        why.append(f"spot flow favors NO only {1 - flow_yes:.2f}")
     if edge is None:
         why.append("no fair value")
     elif act == "buy_yes" and edge < pol["min_model_edge_c"]:

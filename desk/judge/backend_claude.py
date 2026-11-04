@@ -24,7 +24,9 @@ Rules:
 - Units: *_c fields are cents of YES price (1c = 0.01). *_bps fields are basis points of spot.
   minutes_to_close is minutes until the market stops trading. imbalance3 is (bid depth - ask depth) / total
   over the top three levels, in [-1, 1]. fair_yes is code's zero-drift lognormal probability; model_edge_c is
-  fair_yes minus mid, in cents.
+  fair_yes minus mid, in cents. spot_cvd_*_btc is aggregated taker buy minus sell volume in BTC across spot
+  exchanges; spot_book_imb_*bps is (bid depth - ask depth) / total within that distance of mid, in [-1, 1];
+  yes_wins_if_spot says whether YES pays when BTC rises or falls.
 Return only the JSON object the schema asks for."""
 
 

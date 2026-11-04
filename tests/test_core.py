@@ -6,7 +6,7 @@ import pytest
 from cryptography.hazmat.primitives import hashes, serialization
 from cryptography.hazmat.primitives.asymmetric import ed25519, padding, rsa
 
-from desk import ledger
+from desk import ledger, logs
 from desk.book.positions import Bench, Book
 from desk.broker.paper import PaperBroker
 from desk.config import effective_mode, load_config, set_override
@@ -94,7 +94,7 @@ def _ans(**kw):
         "pressure": {"p": .7},
         "setup": {"probs": {"0": .05, "1": .15, "2": .4, "3": .4}, "p_ge": {"0": 1, "1": .95, "2": .8, "3": .4}},
         "action": {"probs": {"buy_yes": .7, "buy_no": .05, "hold": .2, "other": .05}, "pick": "buy_yes"},
-        "worth": {"p": .7}, "exec_degraded": {"p": .1}}
+        "worth": {"p": .7}, "exec_degraded": {"p": .1}, "spot_up": {"p": .7}}
     base.update(kw)
     return base
 
@@ -103,13 +103,17 @@ def test_gambler_policy():
     cfg = load_config()
     pol = cfg["policy"]["gambler"]
     cal = Calibrator()
-    assert rules.gambler(_ans(), {"model_edge_c": 5}, pol, cal).action == "buy_yes"
-    assert rules.gambler(_ans(), {"model_edge_c": 1}, pol, cal).action == "hold"      # code edge too small
-    assert rules.gambler(_ans(), {"model_edge_c": None}, pol, cal).action == "hold"   # missing is not neutral
-    assert rules.gambler(_ans(exec_degraded={"p": .8}), {"model_edge_c": 5}, pol, cal).action == "hold"
-    a = _ans(action={"probs": {"buy_yes": .05, "buy_no": .75, "hold": .15, "other": .05}, "pick": "buy_no"})
-    assert rules.gambler(a, {"model_edge_c": -5}, pol, cal).action == "buy_no"
-    assert rules.gambler(a, {"model_edge_c": 5}, pol, cal).action == "hold"           # model and code disagree
+    up = {"yes_wins_if_spot": "rises"}
+    assert rules.gambler(_ans(), {"model_edge_c": 5, **up}, pol, cal).action == "buy_yes"
+    assert rules.gambler(_ans(), {"model_edge_c": 1, **up}, pol, cal).action == "hold"      # code edge too small
+    assert rules.gambler(_ans(), {"model_edge_c": None, **up}, pol, cal).action == "hold"   # missing is not neutral
+    assert rules.gambler(_ans(exec_degraded={"p": .8}), {"model_edge_c": 5, **up}, pol, cal).action == "hold"
+    assert rules.gambler(_ans(spot_up={"p": .3}), {"model_edge_c": 5, **up}, pol, cal).action == "hold"   # flow against
+    assert rules.gambler(_ans(), {"model_edge_c": 5, "yes_wins_if_spot": "range"}, pol, cal).action == "hold"
+    a = _ans(action={"probs": {"buy_yes": .05, "buy_no": .75, "hold": .15, "other": .05}, "pick": "buy_no"},
+             spot_up={"p": .3})
+    assert rules.gambler(a, {"model_edge_c": -5, **up}, pol, cal).action == "buy_no"
+    assert rules.gambler(a, {"model_edge_c": 5, **up}, pol, cal).action == "hold"           # model and code disagree
 
 
 def test_house_policy_and_quotes():
@@ -149,9 +153,9 @@ def test_risk_engine():
     r.pin("m1")
     assert not r.check(Intent(**{**it.to_dict(), "model_version": "m2"}), 0, 0, 100)[0]
     assert not r.check(Intent(**{**it.to_dict(), "expected_edge_c": 1.0}), 0, 0, 100)[0]      # below fees + min
-    assert not r.check(Intent(**{**it.to_dict(), "count": 50}), 0, 0, 100)[0]
+    assert not r.check(Intent(**{**it.to_dict(), "count": 600}), 0, 0, 1000)[0]
     assert not r.check(Intent(**{**it.to_dict(), "state_ts": time.time() - 999}), 0, 0, 100)[0]
-    assert not r.check(it, 0, 24, 100)[0]                                                    # exposure cap
+    assert not r.check(it, 0, 99, 100)[0]                                                    # exposure cap
     r.halt("test")
     assert not r.check(it, 0, 0, 100)[0]
     ex = Intent(bot="gambler", ticker="T", side="ask", count=5, price=0.40, reduce_only=True, tif="immediate_or_cancel")
@@ -237,3 +241,81 @@ def test_signer_accepts_bare_base64():
     body = "".join(l for l in pem.splitlines() if "-----" not in l)
     s = Signer("kid", body)
     assert s.pem.startswith("-----BEGIN PRIVATE KEY-----") and s.headers("GET", "/x")["KALSHI-ACCESS-KEY"] == "kid"
+
+
+
+def test_gambler_tp_and_sizing():
+    from desk.bots.gambler import Gambler
+    from desk.engine.main import Desk
+    d = Desk()
+    g = Gambler(d)
+    assert g.tp_price("bid", 0.40) == 0.42            # +5% on YES
+    assert g.tp_price("ask", 0.60) == 0.58            # NO bought at 0.40 -> NO 0.42 -> YES 0.58
+    assert g.tp_price("bid", 0.10) == 0.11            # never less than one tick
+    n = asyncio.run(g.size("shadow", "bid", 0.40, "quadratic", 1.0))
+    assert n == int((50 * 0.5) // (0.40 + 0.07 * 0.4 * 0.6))       # 50% of $50 per trade, fee included
+    assert asyncio.run(g.size("shadow", "ask", 0.60, "quadratic", 1.0)) > 0
+
+
+def test_risk_lets_closing_orders_through():
+    cfg = load_config()
+    r = RiskEngine(cfg, "America/Los_Angeles")
+    tp = Intent(bot="gambler", ticker="T", side="ask", count=10, price=0.42, post_only=True, best_bid=0.40,
+                best_ask=0.41, tag="take_profit")
+    assert r.check(tp, 10, 4, None)[0]                     # sells YES we hold: no economics/version needed
+    flip = Intent(**{**tp.to_dict(), "count": 30})
+    assert not r.check(flip, 10, 4, None)[0]               # would flip short: treated as a new entry
+
+
+def test_spot_flow_features():
+    from desk.state.aggr import SpotFlow
+    f = SpotFlow(venues=["coinbase", "kraken"])
+    now = time.time()
+    f.started = now - 4000
+    f.last_ok = {"coinbase": now, "kraken": now}
+    for i in range(300):
+        f.trades.append((now - i * 10, 80000.0, 0.5, 1 if i % 3 else -1, "coinbase" if i % 2 else "kraken"))
+    f.books["coinbase"] = (now, [(79999.0, 5.0)], [(80001.0, 1.0)])
+    f.books["kraken"] = (now, [(79999.5, 3.0)], [(80000.5, 1.0)])
+    x = f.features(now)
+    assert x["flow_venues"] == 2 and x["spot_cvd_5m_btc"] > 0 and x["spot_book_imb_10bps"] > 0.5
+    assert 0.6 < x["spot_buy_share_5m"] < 0.7
+    f.started = now - 100
+    assert f.features(now)["spot_cvd_5m_btc"] is None      # not yet covered: unknown, not zero
+
+
+def test_gambler_take_profit_roundtrip_paper():
+    from desk.bots.gambler import Gambler
+    from desk.engine.main import Desk
+    from desk.venues.kalshi import Book as KB
+    d = Desk()
+    d.cfg["bots"]["gambler"]["mode"] = "paper"
+    g = Gambler(d)
+    book = KB("T", time.time(), bids=[(0.39, 500)], asks=[(0.40, 500)])
+    st = d.md.st("T")
+    st.book, st.book_ts = book, time.time()
+
+    async def go():
+        n = await g.size("paper", "bid", 0.40, "quadratic", 1.0)
+        it = Intent(bot="gambler", ticker="T", side="bid", count=float(n), price=0.40, tif="immediate_or_cancel",
+                    expected_edge_c=5, state_ts=time.time(), best_bid=0.39, best_ask=0.40, decision_id="lead1", tag="entry")
+        await g.place_entry(it, "paper", {}, {"lo_60m": 0.37, "hi_60m": 0.43})
+        lock = d.book.held("gambler")
+        assert lock and lock["tp"] == 0.42 and lock["qty"] == n
+        g.mdx = d.md
+        d.md.refresh_book = lambda *a, **k: _ret(book)
+        await g.manage(lock, "paper")
+        br = d.broker_for("gambler", "paper")
+        opens = await br.open_orders("T")
+        assert len(opens) == 1 and opens[0]["side"] == "ask" and opens[0]["price"] == 0.42
+        br.on_market("T", book, [(time.time() + 1, 0.43, 10000, "bid")])     # market trades through the target
+        assert (await br.position("T")).qty == 0
+        await g.manage(d.book.held("gambler"), "paper")
+        assert d.book.held("gambler") is None
+        tr = [r for r in logs.read("trades") if r.get("bot") == "gambler"][-1]
+        assert tr["rule"] == "take_profit" and tr["pnl_after_fees"] > 0
+    asyncio.run(go())
+
+
+async def _ret(x):
+    return x

@@ -49,12 +49,31 @@ def _either_correct(m0, m30, fee_c: float = 2.0):
     return "buy_yes" if up else ("buy_no" if dn else "hold")
 
 
-def _label_gambler(d: dict, M: Mids) -> dict:
+class Spot:
+    def __init__(self, days: int = 3):
+        rows = sorted((r["ts"], r["spot_vwap_1m"]) for r in logs.read_all("spot", days=days) if r.get("spot_vwap_1m"))
+        self.ts = [x[0] for x in rows]
+        self.px = [x[1] for x in rows]
+
+    def at(self, ts: float, tol: float = 150):
+        i = bisect.bisect_left(self.ts, ts)
+        best = None
+        for j in (i - 1, i):
+            if 0 <= j < len(self.ts) and abs(self.ts[j] - ts) <= tol and (best is None or abs(self.ts[j] - ts) < abs(self.ts[best] - ts)):
+                best = j
+        return self.px[best] if best is not None else None
+
+
+def _label_gambler(d: dict, M: Mids, SP: "Spot | None" = None) -> dict:
     t, ts, a, s = d["ticker"], d["ts"], d.get("answers") or {}, d.get("state") or {}
+    out = {}
+    if SP is not None and (a.get("spot_up") or {}).get("p") is not None:
+        s0, s15 = SP.at(ts), SP.at(ts + 900)
+        if s0 and s15:
+            out["gambler.spot_up"] = (a["spot_up"]["p"], int(s15 > s0))
     m0, m15, m30 = M.at(t, ts), M.at(t, ts + 900), M.at(t, ts + H_MED)
     if not m0 or not m30:
-        return {}
-    out = {}
+        return out
     d30 = (m30[1] - m0[1]) * 100
     path = M.window(t, ts, ts + H_MED)
     rng = (max(x[1] for x in path) - min(x[1] for x in path)) * 100 if path else 0
@@ -138,6 +157,7 @@ def label_outcomes() -> int:
     done = set(json.loads(done_p.read_text())) if done_p.exists() else set()
     decs = logs.read_all("decisions", days=3)
     M = Mids(days=4)
+    SP = Spot(days=4)
     n = 0
     cutoff = time.time() - H_MED - 180
     for d in decs:
@@ -149,7 +169,7 @@ def label_outcomes() -> int:
             continue
         bot = d.get("bot", "")
         if bot == "gambler":
-            lab = _label_gambler(d, M)
+            lab = _label_gambler(d, M, SP)
         elif bot == "house":
             lab = _label_house(d, M)
         elif bot.endswith(".scan"):
