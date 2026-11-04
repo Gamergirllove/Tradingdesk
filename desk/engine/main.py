@@ -242,6 +242,14 @@ class Desk:
                 self.risk.roll_day(eq)
                 for k, e in eq.items():
                     hit, pnl = self.risk.daily_loss_breached(k, e - self.manual_pnl_today(k))
+                    # A loss-limit halt that came only from hand-forced trades is lifted: those don't count.
+                    if not hit:
+                        for bot, why in list(self.risk.state.halted_bots.items()):
+                            if str(why).startswith(f"daily loss limit on {k}") and \
+                                    self.broker_key(bot, effective_mode(self.cfg, bot)) == k:
+                                self.risk.clear_halt(bot)
+                                logs.write("events", {"kind": "halt_lifted", "bot": bot, "reason": "bot-only P&L within limit",
+                                                      "bot_pnl": pnl})
                     if hit:
                         for bot in self.bots:
                             if self.broker_key(bot, effective_mode(self.cfg, bot)) == k and bot not in self.risk.state.halted_bots:
@@ -295,11 +303,12 @@ class Desk:
         mode = {"demo": "demo", "live": "live"}.get(broker_key, "paper")
         tot = 0.0
         for r in logs.read("trades", local_day(self.tz)):
-            if r.get("manual") and r.get("mode") == mode and r.get("pnl_after_fees") is not None:
+            manual = r.get("manual") or str(r.get("lead_id", "")).startswith("force_")
+            if manual and r.get("mode") == mode and r.get("pnl_after_fees") is not None:
                 if mode != "paper" or broker_key == f"paper_{r.get('bot')}":
                     tot += float(r["pnl_after_fees"])
         lk = self.book.held("gambler")
-        if lk and lk.get("manual") and lk.get("mode") == mode and (mode != "paper" or broker_key == "paper_gambler"):
+        if lk and (lk.get("manual") or str(lk.get("lead_id", "")).startswith("force_")) and lk.get("mode") == mode and (mode != "paper" or broker_key == "paper_gambler"):
             bk = self.md_for(mode).st(lk["ticker"]).book
             if bk and bk.mid is not None:
                 long_yes = lk.get("side") == "bid"
