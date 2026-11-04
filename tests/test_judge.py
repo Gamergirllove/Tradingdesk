@@ -125,3 +125,15 @@ def test_claude_backend_request_shape(monkeypatch):
     assert "STATE" in seen["messages"][0]["content"]
     assert res.model_version == "claude-haiku-5-5-test"
     assert abs(res.cost_usd - (1000 * 0.10 + 200 * 0.50) / 1e6) < 1e-12
+
+
+def test_no_credit_holds_and_never_disables():
+    c = TestClient(create_app(load_config(), backend=MockBackend(fail="no_credit")))
+    r = c.post("/v1/battery", json=body(), headers={"X-Desk-Secret": "test-secret"})
+    assert r.status_code == 402 and r.json()["error"] == "no_credit"
+
+    def nc(req):
+        return httpx.Response(402, json={"ok": False, "error": "no_credit"})
+    jc = _client_with(nc)
+    acts = [asyncio.run(jc.ask("gambler", qg.BATTERY, STATE, "d")) for _ in range(6)]
+    assert {v.action for v in acts} == {"hold"} and {v.kind for v in acts} == {"no_credit"}

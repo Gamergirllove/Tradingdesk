@@ -140,10 +140,10 @@ class Desk:
                 tot += p.exposure()
         return round(tot, 4)
 
-    async def alert(self, title: str, text: str, priority: str = "default"):
+    async def alert(self, title: str, text: str, priority: str = "default", dedupe_s: float = 600):
         key = (title, text)
         now = time.time()
-        if any(k == key and now - ts < 600 for ts, k in self.recent_alerts):
+        if any(k == key and now - ts < dedupe_s for ts, k in self.recent_alerts):
             return
         self.recent_alerts.append((now, key))
         logs.write("alerts", {"title": title, "text": text, "priority": priority})

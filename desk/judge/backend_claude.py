@@ -31,7 +31,7 @@ Return only the JSON object the schema asks for."""
 class BackendError(Exception):
     def __init__(self, kind: str, msg: str):
         super().__init__(msg)
-        self.kind = kind   # malformed | rate_limited | overloaded | down | auth | bad_output
+        self.kind = kind   # malformed | rate_limited | overloaded | down | auth | bad_output | no_credit
 
 
 @dataclass
@@ -92,12 +92,16 @@ class ClaudeBackend:
         try:
             resp = await self.client.messages.create(**kwargs)
         except anthropic.BadRequestError as e:
+            if "credit balance" in str(e).lower():
+                raise BackendError("no_credit", "Anthropic account has no credit")
             if self._thinking_param and "thinking" in str(e).lower():
                 self._thinking_param = False
                 kwargs.pop("thinking", None)
                 try:
                     resp = await self.client.messages.create(**kwargs)
                 except anthropic.BadRequestError as e2:
+                    if "credit balance" in str(e2).lower():
+                        raise BackendError("no_credit", "Anthropic account has no credit")
                     raise BackendError("malformed", str(e2)[:400])
             else:
                 raise BackendError("malformed", str(e)[:400])

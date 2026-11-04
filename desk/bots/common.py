@@ -13,6 +13,10 @@ async def handle_verdict_failure(desk, bot: str, v) -> None:
         desk.risk.halt(f"malformed battery {v.battery_id}: {v.message[:120]}", bot=bot)
         await desk.alert(f"{bot} halted", f"Judge rejected the question battery as malformed. It will not be "
                                           f"retried. {v.message[:200]}", priority="high")
+    elif v.kind == "no_credit":
+        await desk.alert("Desk is waiting for Claude credit",
+                         "Your Anthropic account has no credit, so the bots are holding. Add $5 at "
+                         "platform.claude.com/settings/billing; the desk resumes by itself.", dedupe_s=6 * 3600)
     elif v.action == "halt":
         desk.risk.halt(f"judge errors: {v.kind} {v.message[:120]}", bot=bot)
         await desk.alert(f"{bot} halted", f"Repeated judge errors ({v.kind}). Resume needs APPROVE.",

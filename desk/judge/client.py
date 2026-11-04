@@ -50,9 +50,9 @@ class JudgeClient:
             return {"ok": False}
 
     def _fail(self, kind: str, action: str, msg: str, bid: str) -> Verdict:
-        if kind not in ("budget", "no_key", "malformed"):
+        if kind not in ("budget", "no_key", "malformed", "no_credit"):
             self.consecutive_errors += 1
-        if self.consecutive_errors >= self.halt_after and kind not in ("budget", "no_key"):
+        if self.consecutive_errors >= self.halt_after and kind not in ("budget", "no_key", "no_credit"):
             action = "halt"
         return Verdict(ok=False, kind=kind, action=action, message=msg, battery_id=bid)
 
@@ -97,6 +97,8 @@ class JudgeClient:
             return self._fail("rate_limited", "hold", msg, bid)
         if err == "budget_exhausted":
             return self._fail("budget", "hold", msg, bid)
+        if err == "no_credit":
+            return self._fail("no_credit", "hold", msg, bid)
         if err == "no_key":
             return self._fail("no_key", "hold", msg, bid)
         if err in ("upstream_auth", "unauthorized"):

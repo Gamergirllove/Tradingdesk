@@ -113,7 +113,7 @@ def create_app(cfg: dict | None = None, backend=None) -> FastAPI:
         except BackendError as e:
             logs.write("judge", {"kind": e.kind, "bot": bot, "decision_id": decision_id, "message": str(e)[:300]})
             status = {"malformed": 422, "rate_limited": 429, "overloaded": 503, "down": 502,
-                      "auth": 401, "bad_output": 502}.get(e.kind, 502)
+                      "auth": 401, "bad_output": 502, "no_credit": 402}.get(e.kind, 502)
             kind = "malformed_question" if e.kind == "malformed" else e.kind
             if e.kind == "auth":
                 kind = "upstream_auth"
