@@ -68,6 +68,16 @@ class Book:
         return self.best_ask - self.best_bid
 
 
+def normalize_pem(text: str) -> str:
+    """Accept a key pasted with or without its BEGIN/END lines (phones often copy only the body)."""
+    t = text.strip()
+    if "-----BEGIN" in t:
+        return t + "\n"
+    body = "".join(t.split())
+    lines = "\n".join(body[i:i + 64] for i in range(0, len(body), 64))
+    return f"-----BEGIN PRIVATE KEY-----\n{lines}\n-----END PRIVATE KEY-----\n"
+
+
 @dataclass
 class Signer:
     key_id: str
@@ -75,6 +85,7 @@ class Signer:
     _key: Any = field(default=None, repr=False)
 
     def __post_init__(self):
+        self.pem = normalize_pem(self.pem)
         self._key = serialization.load_pem_private_key(self.pem.encode(), password=None)
 
     def headers(self, method: str, path: str) -> dict[str, str]:

@@ -382,7 +382,7 @@ async def _save_keys(desk, body: dict) -> dict:
             continue
         await c.close()
         secrets.write(f"{prefix}_key_id", kid)
-        secrets.write(f"{prefix}_key.pem", pem)
+        secrets.write(f"{prefix}_key.pem", sg.pem)
         saved.append(f"{label} ({note})")
     if problems:
         return {"ok": False, "error": "; ".join(problems), "saved": saved}

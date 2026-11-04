@@ -228,3 +228,12 @@ def test_implied_sigma_roundtrip():
     ladder = [{"event_ticker": "E", "strike_type": "greater", "floor_strike": 79500, "close_time": close,
                "yes_bid_dollars": f"{p - 0.005:.4f}", "yes_ask_dollars": f"{p + 0.005:.4f}"}]
     assert abs(event_iv(ladder, "E", 80000) - 0.42) < 0.03
+
+
+def test_signer_accepts_bare_base64():
+    k = ed25519.Ed25519PrivateKey.generate()
+    pem = k.private_bytes(serialization.Encoding.PEM, serialization.PrivateFormat.PKCS8,
+                          serialization.NoEncryption()).decode()
+    body = "".join(l for l in pem.splitlines() if "-----" not in l)
+    s = Signer("kid", body)
+    assert s.pem.startswith("-----BEGIN PRIVATE KEY-----") and s.headers("GET", "/x")["KALSHI-ACCESS-KEY"] == "kid"
