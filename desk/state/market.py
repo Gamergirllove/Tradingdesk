@@ -24,6 +24,7 @@ class TickerState:
     trades_ts: float = 0.0
     last_mid_log: float = 0.0
     errors: int = 0
+    backfilled: bool = False
 
 
 class MarketData:
@@ -85,8 +86,36 @@ class MarketData:
         return sm.get("fee_type") or "quadratic", float(sm.get("fee_multiplier") or 1.0)
 
     # ---------- per-ticker refresh ----------
+    async def backfill(self, ticker: str, minutes: int = 90) -> int:
+        """Seed mid history from 1-minute candles so a restart doesn't mean a 15-minute warm-up."""
+        s = self.st(ticker)
+        if s.backfilled:
+            return 0
+        s.backfilled = True
+        series = s.meta.get("_series") or ticker.split("-")[0]
+        now = time.time()
+        try:
+            rows = await self.c.candles(series, ticker, int(now - minutes * 60), int(now))
+        except KalshiError:
+            return 0
+        pts = []
+        for c in rows:
+            ts = c.get("end_period_ts")
+            b = fnum((c.get("yes_bid") or {}).get("close_dollars"))
+            a = fnum((c.get("yes_ask") or {}).get("close_dollars"))
+            if not ts or not b or not a or a <= b:
+                continue
+            pts.append((float(ts), (a + b) / 2, a - b, b, a))
+        old = list(s.hist)
+        s.hist.clear()
+        for p in sorted(pts + old):
+            s.hist.append(p)
+        return len(pts)
+
     async def refresh_book(self, ticker: str, min_interval: float = 2.0) -> Book | None:
         s = self.st(ticker)
+        if not s.backfilled:
+            await self.backfill(ticker)
         if s.book and time.time() - s.book_ts < min_interval:
             return s.book
         try:

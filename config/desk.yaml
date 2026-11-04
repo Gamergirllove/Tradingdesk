@@ -48,7 +48,7 @@ bots:
   gambler:
     enabled: true
     mode: shadow              # rung: shadow -> paper -> demo -> live
-    decision_every_s: 300
+    decision_every_s: 120
     size_pct_equity: 50       # stake per trade as % of the account, from rules, never from model confidence
     take_profit_pct: 5        # +5% on the contract held, rested as a post-only maker order (0 fee)
     stop_c: 5
@@ -59,7 +59,7 @@ bots:
   house:
     enabled: true
     mode: shadow
-    scan_every_s: 600
+    scan_every_s: 180
     judge_every_s: 600
     judge_ttl_s: 900          # answers older than this are stale -> pull quotes
     quote_contracts: 5

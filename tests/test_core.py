@@ -319,3 +319,20 @@ def test_gambler_take_profit_roundtrip_paper():
 
 async def _ret(x):
     return x
+
+
+def test_backfill_seeds_history():
+    from desk.state.market import MarketData
+
+    class FakeClient:
+        async def candles(self, series, ticker, a, b, period=1):
+            assert series == "KXBTCD"
+            now = int(time.time())
+            return [{"end_period_ts": now - 60 * i, "yes_bid": {"close_dollars": f"{0.40 + 0.001 * i:.4f}"},
+                     "yes_ask": {"close_dollars": f"{0.42 + 0.001 * i:.4f}"}} for i in range(60)] + \
+                   [{"end_period_ts": now - 3700, "yes_bid": {"close_dollars": "0.0000"}, "yes_ask": {"close_dollars": "0.0100"}}]
+
+    md = MarketData(FakeClient(), load_config())
+    n = asyncio.run(md.backfill("KXBTCD-26NOV0417-T80000"))
+    assert n == 60 and len(md.st("KXBTCD-26NOV0417-T80000").hist) == 60
+    assert asyncio.run(md.backfill("KXBTCD-26NOV0417-T80000")) == 0        # once per ticker

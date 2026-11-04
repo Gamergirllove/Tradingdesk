@@ -202,6 +202,11 @@ class KalshiClient:
         data = await self._req("GET", f"/markets/{ticker}/orderbook", params={"depth": depth})
         return parse_book(ticker, data)
 
+    async def candles(self, series: str, ticker: str, start_ts: int, end_ts: int, period: int = 1) -> list[dict]:
+        data = await self._req("GET", f"/series/{series}/markets/{ticker}/candlesticks",
+                               params={"start_ts": int(start_ts), "end_ts": int(end_ts), "period_interval": period})
+        return data.get("candlesticks") or []
+
     async def trades(self, ticker: str, min_ts: int | None = None, limit: int = 500) -> list[dict]:
         params: dict[str, Any] = {"ticker": ticker, "limit": limit}
         if min_ts:
