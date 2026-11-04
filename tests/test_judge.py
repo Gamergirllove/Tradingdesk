@@ -137,3 +137,30 @@ def test_no_credit_holds_and_never_disables():
     jc = _client_with(nc)
     acts = [asyncio.run(jc.ask("gambler", qg.BATTERY, STATE, "d")) for _ in range(6)]
     assert {v.action for v in acts} == {"hold"} and {v.kind for v in acts} == {"no_credit"}
+
+
+def test_rules_judge_answers_every_battery_for_free():
+    from desk.judge.backend_rules import RulesBackend
+    from desk.questions import house as qh, scan as qs
+    cfg = load_config()
+    assert cfg["judge"]["backend"] == "rules"
+    c = TestClient(create_app(cfg))                      # no Anthropic key needed
+    for qs_ in (qg.BATTERY, qh.BATTERY, qs.battery("gambler", ["A", "B"])):
+        r = c.post("/v1/battery", json=body(qs_), headers={"X-Desk-Secret": "test-secret"})
+        j = r.json()
+        assert r.status_code == 200 and j["backend"] == "rules" and j["model_version"] == "rules-v1"
+        assert j["cost_usd"] == 0 and set(j["answers"]) == {q.id for q in qs_}
+    st = {**STATE, "ret_15m_c": 4, "ret_5m_c": 1.5, "rv_30m_c": 0.8, "spot_cvd_5m_btc": 20, "spot_book_imb_10bps": 0.3}
+    a = asyncio.run(RulesBackend().ask(qg.BATTERY, st)).raw
+    assert max(a["regime"], key=a["regime"].get) == "trending"
+    assert max(a["action"], key=a["action"].get) == "buy_yes" and a["spot_up"]["p_true"] > 0.6
+    assert ledger.spent() == 0
+
+
+def test_judge_switch_picks_up_override(tmp_data):
+    from desk.config import set_override
+    c = TestClient(create_app(load_config()))
+    assert c.get("/health").json()["backend"] == "rules"
+    set_override("judge.backend", "claude")
+    h = c.get("/health").json()
+    assert h["backend"] is None and h["has_key"] is False           # claude selected, no key -> holds

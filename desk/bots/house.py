@@ -86,7 +86,10 @@ class House:
         mid = cand.feat["mid"]
         band = (round(max(0.02, mid - self.cfg["band_c"] / 100), 2), round(min(0.98, mid + self.cfg["band_c"] / 100), 2))
         self.answers, self.answers_ts, self.prev_inv, self.fill_events = None, 0.0, None, []
+        br = self.d.broker_for(NAME, mode)
+        start_eq = await br.equity() if br else None
         self.d.book.acquire(NAME, cand.ticker, cand.lead_id, {"mode": mode, "band": band, "start_mid": mid,
+                                                             "start_equity": start_eq,
                                                              "opened": time.time(), "series": cand.series,
                                                              "fee_type": cand.fee_type, "fee_mult": cand.fee_mult})
         await self.d.alert("House opened a session", f"{mode}: quoting {cand.ticker} band {band}")
@@ -239,7 +242,11 @@ class House:
                 if (await broker.position(t)).qty:
                     self.status = {"state": "flattening", "mode": mode, "ticker": t, "reason": reason}
                     return          # keep the lock until flat
+        pnl = None
+        if broker and lock.get("start_equity") is not None:
+            pnl = round(await broker.equity() - lock["start_equity"], 4)
         logs.write("trades", {"bot": NAME, "lead_id": lock["lead_id"], "ticker": t, "session_end": reason,
+                              "pnl_after_fees": pnl,
                               "mode": mode, "held_s": round(time.time() - lock.get("opened", time.time())),
                               "fills": len(self.fill_events)})
         if bench_reason:

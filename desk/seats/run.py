@@ -26,6 +26,8 @@ async def run_seat(seat: str, prompt: str | None = None, cfg: dict | None = None
     from claude_agent_sdk import AssistantMessage, ClaudeAgentOptions, ResultMessage, TextBlock, query
     cfg = cfg or load_config()
     sc = cfg["seats"]
+    if cfg["judge"].get("backend", "claude") != "claude":
+        return {"ok": False, "error": "seats run on Claude; the judge is on rules (no AI credit)"}
     tz = get_path(cfg, "desk.timezone", "America/Los_Angeles")
     secrets.collect_inbox("anthropic_api_key")
     key = os.environ.get("ANTHROPIC_API_KEY_SEATS") or secrets.read("anthropic_api_key")

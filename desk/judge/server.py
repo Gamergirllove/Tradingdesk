@@ -15,11 +15,12 @@ from fastapi import FastAPI, Header, Request
 from fastapi.responses import JSONResponse
 
 from .. import ledger, logs, secrets
-from ..config import get_path, load_config
+from ..config import get_path, load_config, overrides_path
 from ..questions.base import Q, battery_id, normalize, validate
 from ..state.snapshot import est_tokens
 from .backend_claude import BackendError, ClaudeBackend
 from .backend_mock import MockBackend
+from .backend_rules import RulesBackend
 
 
 def _err(status: int, kind: str, msg: str = "", **extra) -> JSONResponse:
@@ -31,21 +32,38 @@ class Judge:
         self.cfg = cfg
         self.backend = backend
         self.injected = backend is not None
-        self.backend_kind = os.environ.get("DESK_JUDGE_BACKEND", "claude")
+        self.env_kind = os.environ.get("DESK_JUDGE_BACKEND")
         self.tz = get_path(cfg, "desk.timezone", "America/Los_Angeles")
+        self._ov_mtime = None
+        self.rules = RulesBackend()
+
+    def _refresh_cfg(self):
+        """Pick up an approved judge switch from overrides.yaml without a restart."""
+        p = overrides_path()
+        m = p.stat().st_mtime if p.exists() else 0
+        if m != self._ov_mtime:
+            self._ov_mtime = m
+            self.cfg = load_config()
+
+    @property
+    def backend_kind(self) -> str:
+        return self.env_kind or self.cfg["judge"].get("backend", "claude")
 
     def ensure_backend(self):
         if self.injected:
             return self.backend
+        self._refresh_cfg()
         if self.backend_kind == "mock":
-            self.backend = self.backend or MockBackend()
+            self.backend = self.backend if isinstance(self.backend, MockBackend) else MockBackend()
             return self.backend
+        if self.backend_kind == "rules":
+            return self.rules
         secrets.collect_inbox("anthropic_api_key")
         key = os.environ.get("ANTHROPIC_API_KEY_JUDGE") or secrets.read("anthropic_api_key")
         if not key:
             self.backend = None
             return None
-        if self.backend is None or getattr(self.backend, "_key", None) != key:
+        if not isinstance(self.backend, ClaudeBackend) or getattr(self.backend, "_key", None) != key:
             j = self.cfg["judge"]
             b = ClaudeBackend(key, j["model"], int(j.get("max_tokens", 600)), j.get("pricing_per_mtok", {}),
                               j.get("mode", "batched"))
@@ -78,7 +96,7 @@ def create_app(cfg: dict | None = None, backend=None) -> FastAPI:
     async def health():
         b = judge.ensure_backend()
         return {"ok": True, "backend": getattr(b, "name", None), "has_key": b is not None,
-                "model": cfg["judge"]["model"], "spent_today": ledger.spent(tz=judge.tz),
+                "model": judge.cfg["judge"]["model"] if getattr(b, "name", "") == "claude" else getattr(b, "version", None), "spent_today": ledger.spent(tz=judge.tz),
                 "cap": cfg["judge"].get("daily_budget_usd")}
 
     @app.post("/v1/battery")
@@ -101,8 +119,8 @@ def create_app(cfg: dict | None = None, backend=None) -> FastAPI:
         b = judge.ensure_backend()
         if b is None:
             return _err(503, "no_key", "Anthropic API key not set")
-        est = judge.est_cost(qs, state)
-        if judge.budget_left() < est:
+        est = judge.est_cost(qs, state) if getattr(b, "name", "") != "rules" else 0.0
+        if est and judge.budget_left() < est:
             return _err(402, "budget_exhausted", "daily AI budget reached", spent=ledger.spent(tz=judge.tz))
         t0 = time.time()
         try:

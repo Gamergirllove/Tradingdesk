@@ -7,6 +7,7 @@ desk:
   timezone: America/Los_Angeles
   daily_summary_hour: 8       # local hour the daily summary is pushed
   paper_bankroll: 50          # starting cash for each paper bot
+  ai_credit_milestone_usd: 5  # push "add this to Claude" once live profit reaches this
 
 venue:
   name: kalshi
@@ -24,6 +25,7 @@ underlying:                   # spot feed used by code for fair value (public, n
   poll_seconds: 30
 
 judge:
+  backend: rules              # rules (free, code-only answers) | claude (Haiku 5.5, uses credit)
   url: http://127.0.0.1:8701
   model: claude-haiku-5-5
   pinned_version: ""          # empty = pin to the first version that answers; mismatch vetoes orders

@@ -75,6 +75,9 @@ async def status_payload(desk) -> dict:
         "keys": {"kalshi": bool(desk.prod_signer), "kalshi_demo": bool(desk.demo_signer)},
         "funnel": desk.funnel.last_stats, "public_url": desk.public_url(), "ladder": LADDER,
         "mode_ceiling": desk.cfg["desk"]["mode_ceiling"],
+        "judge_backend": desk.cfg["judge"].get("backend", "claude"),
+        "live_profit": desk.live_profit(),
+        "milestone": desk.cfg["desk"].get("ai_credit_milestone_usd", 5),
     }
 
 
@@ -185,7 +188,7 @@ def create_app(desk) -> FastAPI:
             return deny()
         b = await req.json()
         act, bot = b.get("action"), b.get("bot")
-        if bot not in desk.bots and act not in ("kill_all", "ceiling", "rebuild_calibration", "update_code"):
+        if bot not in desk.bots and act not in ("kill_all", "ceiling", "rebuild_calibration", "update_code", "judge"):
             return JSONResponse({"ok": False, "error": "unknown bot"}, status_code=400)
         if act == "pause":                      # reversible: immediate
             desk.risk.pause(bot, "paused from dashboard")
@@ -228,6 +231,20 @@ def create_app(desk) -> FastAPI:
                 desk.approvals.request("apply_calibration", "Apply Platt calibration",
                                        f"Fitted on {rep.get('n_labelled')} labelled answers.", {"at": int(time.time())})
             return {"ok": True, "msg": "calibration report rebuilt", "report": rep.get("summary")}
+        if act == "judge":
+            to = b.get("to")
+            if to not in ("rules", "claude"):
+                return JSONResponse({"ok": False, "error": "judge must be rules or claude"}, status_code=400)
+            if to == "rules":
+                from ..config import set_override
+                set_override("judge.backend", "rules")
+                desk.risk.pin("")
+                desk.reload()
+                return {"ok": True, "msg": "rules judge on (free)"}
+            it = desk.approvals.request("judge_switch", "Switch the judge to Claude",
+                                        "Uses Anthropic credit (capped at the daily AI budget). Thresholds re-pin "
+                                        "to the first Claude version that answers.", {"to": "claude"})
+            return {"ok": True, "msg": "tap Approve to switch", "approval": it}
         if act == "update_code":
             (data_dir() / "update_requested").write_text(str(time.time()))
             return {"ok": True, "msg": "update requested; the box pulls and restarts within 2 minutes"}

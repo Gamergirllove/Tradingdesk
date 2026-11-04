@@ -78,3 +78,26 @@ def test_internal_routes(tmp_data):
     assert bad.status_code == 400
     assert c.post("/internal/pause", headers=h, json={"bot": "house", "reason": "test", "seat": "risk"}).json()["ok"]
     assert d.risk.blocked("house")
+
+
+def test_judge_switch_and_milestone(tmp_data):
+    import asyncio, json
+    from desk import logs
+    d, c = make()
+    c.get("/setup")
+    c.post("/setup", json={"code": (tmp_data / "setup_code").read_text().strip(), "password": "longpassword"})
+    r = c.post("/api/control", json={"action": "judge", "to": "claude"}).json()
+    assert d.cfg["judge"]["backend"] == "rules" and r["approval"]["kind"] == "judge_switch"
+    assert c.post("/api/approve", json={"id": r["approval"]["id"], "text": "APPROVE"}).json()["ok"]
+    assert d.cfg["judge"]["backend"] == "claude"
+    assert c.post("/api/control", json={"action": "judge", "to": "rules"}).json()["ok"]
+    assert d.cfg["judge"]["backend"] == "rules"
+    logs.write("trades", {"bot": "gambler", "mode": "paper", "pnl_after_fees": 50})   # paper never counts
+    logs.write("trades", {"bot": "gambler", "mode": "live", "pnl_after_fees": 3.0})
+    asyncio.run(d.check_milestone())
+    assert not (tmp_data / "milestones.json").exists()
+    logs.write("trades", {"bot": "house", "mode": "live", "pnl_after_fees": 2.25})
+    asyncio.run(d.check_milestone())
+    assert json.loads((tmp_data / "milestones.json").read_text())["ai_credit"]["profit"] == 5.25
+    assert any("Kalshi made" in a["title"] for a in logs.read("alerts"))
+    assert c.get("/api/status").json()["live_profit"] == 5.25

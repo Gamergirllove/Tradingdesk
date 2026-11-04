@@ -6,6 +6,7 @@ Code calculates the state -> the judge answers the battery -> code applies polic
 from __future__ import annotations
 
 import asyncio
+import json
 import os
 import time
 import traceback
@@ -278,6 +279,7 @@ class Desk:
                 _, h, m = local_hm(self.tz)
                 from ..util import local_day
                 today = local_day(self.tz)
+                await self.check_milestone()
                 if h == hour and self.last_summary_day != today:
                     self.last_summary_day = today
                     txt = await asyncio.to_thread(daily.build_text, self)
@@ -285,6 +287,26 @@ class Desk:
             except Exception as e:
                 logs.write("events", {"kind": "schedule_error", "error": repr(e)[:300]})
             await asyncio.sleep(60)
+
+    def live_profit(self) -> float:
+        """Real money only: closed live trades and House live sessions, after fees."""
+        tot = 0.0
+        for r in logs.read_all("trades", days=400):
+            if r.get("mode") == "live" and r.get("pnl_after_fees") is not None:
+                tot += float(r["pnl_after_fees"])
+        return round(tot, 4)
+
+    async def check_milestone(self):
+        target = float(self.cfg["desk"].get("ai_credit_milestone_usd", 5))
+        p = data_dir() / "milestones.json"
+        done = json.loads(p.read_text()) if p.exists() else {}
+        prof = self.live_profit()
+        if prof >= target and not done.get("ai_credit"):
+            done["ai_credit"] = {"ts": time.time(), "profit": prof}
+            p.write_text(json.dumps(done))
+            await self.alert(f"Kalshi made ${prof:.2f}", f"The desk has made ${prof:.2f} of real profit on Kalshi "
+                             f"after fees. Add ${target:.0f} at platform.claude.com/settings/billing, then tap "
+                             "Setup -> Use Claude to turn the AI judge on.", priority="high", dedupe_s=86400)
 
     async def startup(self):
         # A malformed battery is caught again before any model call on the first ask, so halts from an

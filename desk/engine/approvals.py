@@ -103,6 +103,11 @@ class Approvals:
             set_override(f"bots.{bot}.mode", to)
             d.reload()
             return True, f"{bot} now runs at {to}"
+        if k == "judge_switch":
+            set_override("judge.backend", p["to"])
+            d.risk.pin("")
+            d.reload()
+            return True, f"judge is now {p['to']}"
         if k == "resume":
             d.risk.clear_halt(p.get("bot"))
             return True, "resumed"

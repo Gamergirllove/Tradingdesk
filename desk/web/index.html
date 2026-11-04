@@ -16,6 +16,9 @@
       <div class="row small dim" style="margin-top:8px"><span id="judgeTxt"></span><span id="pinTxt"></span></div>
     </div>
     <div id="bots"></div>
+    <div class="card"><div class="row"><h2 style="margin:0">Live profit → Claude credit</h2><span id="msTxt" class="mono dim"></span></div>
+      <div class="bar" style="margin-top:10px"><i id="msBar" style="width:0;background:var(--good)"></i></div>
+      <p class="small dim" style="margin:8px 0 0">Real money only. You get a push when it reaches the goal.</p></div>
     <div class="card"><h2>Equity</h2><div id="equity" class="kv"></div></div>
     <button class="danger" id="kill">Kill switch: pull all quotes and halt</button>
     <p class="dim small" style="text-align:center">Tap twice to confirm. Resuming needs APPROVE.</p>
@@ -56,6 +59,10 @@
       <label>Kalshi DEMO key ID</label><input id="did" autocomplete="off">
       <label>Kalshi DEMO private key</label><textarea id="dpem"></textarea>
       <button class="primary" id="saveKeys">Save keys</button></div>
+    <div class="card"><h2>Judge</h2>
+      <div class="kv" style="margin-bottom:10px"><b>Now</b><span id="judgeNow"></span></div>
+      <div class="grid2"><button id="jRules">Use rules (free)</button><button class="primary" id="jClaude">Use Claude</button></div>
+      <p class="small dim" style="margin:8px 0 0">Claude needs credit at platform.claude.com/settings/billing.</p></div>
     <div class="card"><h2>Server</h2><div class="kv"><b>Link</b><span id="url" class="mono"></span><b>Uptime</b><span id="up"></span></div>
       <button style="margin-top:12px" id="upd">Pull latest code and restart</button></div>
   </section>
@@ -110,10 +117,12 @@ async function load(){
  const n=S.approvals.length;$('apprBadge').textContent=n;$('apprBadge').classList.toggle('hide',!n);
  if(tab==='desk')renderDesk();if(tab==='appr')renderAppr();if(tab==='log')renderLog();if(tab==='rep')renderRep();if(tab==='set')renderSet()}
 function renderDesk(){
+ const ms=S.milestone||5,lp=S.live_profit||0;$('msTxt').textContent=`$${fmt(lp)} / $${fmt(ms,0)}`;
+ $('msBar').style.width=Math.max(0,Math.min(100,100*lp/ms))+'%';
  const a=S.ai;const pct=a.cap?Math.min(100,100*a.spent/a.cap):0;$('aiBar').style.width=pct+'%';
  $('aiBar').style.background=pct>90?'var(--bad)':pct>70?'var(--warn)':'var(--accent)';
  $('aiTxt').textContent=`$${fmt(a.spent,4)} / $${fmt(a.cap)}`;
- const j=S.judge||{};$('judgeTxt').textContent=j.has_key?`judge ${j.backend} ready`:(j.ok?'judge: add Anthropic key':'judge offline');
+ const j=S.judge||{};$('judgeTxt').textContent=j.backend==='rules'?'judge: rules (free, no AI)':(j.has_key?`judge ${j.backend} ready`:(j.ok?'judge: add Anthropic key':'judge offline'));
  $('pinTxt').textContent=S.risk.pinned_version?('pinned '+S.risk.pinned_version):'version not pinned yet';
  $('bots').innerHTML=Object.entries(S.bots).map(([k,v])=>botCard(k,v)).join('');
  const eq=Object.entries(S.equity||{});$('equity').innerHTML=eq.length?eq.map(([k,v])=>`<b>${esc(k)}</b><span class="mono">$${fmt(v)}</span>`).join(''):'<span class="dim">no paper/demo/live accounts yet (shadow only)</span>'}
@@ -157,10 +166,13 @@ $('recal').onclick=async()=>{const r=await api('/api/control',{action:'rebuild_c
 $('ask').onclick=async()=>{const r=await api('/api/ask_seat',{seat:$('seat').value,prompt:$('seatQ').value});toast(r.msg);$('seatQ').value=''};
 
 function renderSet(){
+ $('judgeNow').textContent=S.judge_backend==='rules'?'Rules (free, code only)':'Claude Haiku 5.5';
  $('keyState').innerHTML=`<b>Anthropic</b><span>${S.judge&&S.judge.has_key?'set':'missing'}</span><b>Kalshi</b><span>${S.keys.kalshi?'set':'not set'}</span><b>Kalshi demo</b><span>${S.keys.kalshi_demo?'set':'not set'}</span>`;
  $('url').textContent=S.public_url||'–';$('up').textContent=Math.round(S.uptime_s/60)+' min'}
 $('saveKeys').onclick=async()=>{const b={anthropic_key:ak.value,kalshi_key_id:kid.value,kalshi_pem:kpem.value,kalshi_demo_key_id:did.value,kalshi_demo_pem:dpem.value};
  const r=await api('/api/keys',b);toast(r.ok?('Saved: '+(r.saved||[]).join(', ')):r.error);if(r.ok)['ak','kid','kpem','did','dpem'].forEach(i=>$(i).value='');load()};
+$('jRules').onclick=async()=>{const r=await api('/api/control',{action:'judge',to:'rules'});toast(r.msg||r.error);load()};
+$('jClaude').onclick=async()=>{const r=await api('/api/control',{action:'judge',to:'claude'});toast(r.msg||r.error);if(r.approval)tabTo('appr');load()};
 $('upd').onclick=async()=>{const r=await api('/api/control',{action:'update_code'});toast(r.msg)};
 
 load();setInterval(()=>{if(!document.hidden&&(tab==='desk'||tab==='appr'))load()},5000);
