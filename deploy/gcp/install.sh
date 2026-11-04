@@ -40,6 +40,16 @@ if [ ! -f $SECR/dashboard_password ] && [ ! -f $DATA/setup_code ]; then
   chown desk-engine:desk $DATA/setup_code && chmod 0660 $DATA/setup_code
 fi
 
+# one-time secrets dropped in instance metadata by the project owner (removed from metadata after boot)
+md() { curl -fs -m 5 -H "Metadata-Flavor: Google" "http://metadata.google.internal/computeMetadata/v1/instance/attributes/$1" 2>/dev/null; }
+put() { # name owner value
+  umask 077; printf '%s\n' "$3" > "$SECR/$1.tmp" && chown "$2":desk "$SECR/$1.tmp" && chmod 600 "$SECR/$1.tmp" && mv "$SECR/$1.tmp" "$SECR/$1"; umask 022; }
+KENV=$(md desk-kalshi-env); KID=$(md desk-kalshi-key-id); KPEM=$(md desk-kalshi-pem); AKEY=$(md desk-anthropic-key)
+PFX=kalshi; [ "$KENV" = "demo" ] && PFX=kalshi_demo
+if [ -n "$KID" ] && [ -n "$KPEM" ]; then put ${PFX}_key_id desk-engine "$KID"; put ${PFX}_key.pem desk-engine "$KPEM"; echo "kalshi ($PFX) key installed from metadata"; fi
+if [ -n "$AKEY" ]; then put anthropic_api_key desk-judge "$AKEY"; echo "anthropic key installed from metadata"; fi
+unset KID KPEM AKEY
+
 # code
 if [ -d $APP/.git ]; then
   git -C $APP fetch -q origin $BRANCH && git -C $APP reset -q --hard origin/$BRANCH
