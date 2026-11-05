@@ -6,7 +6,7 @@ import time
 
 from .. import logs
 from ..config import effective_mode, profile, series_of
-from ..policy import rules
+from ..policy import halftime, rules
 from ..questions.gambler import BATTERY
 from ..risk.engine import Intent
 from ..state import snapshot as snap
@@ -45,7 +45,9 @@ class Gambler:
         if blocked:
             self.status = {"state": "blocked", "reason": blocked, "mode": mode}
             return
-        if time.time() - self.last_decision < self.cfg["decision_every_s"]:
+        every = min(float(profile(self.d.cfg, NAME, x).get("decision_every_s", 60))
+                    for x in (self.d.cfg["venue"].get("universe_series") or [None]))
+        if time.time() - self.last_decision < every:
             return
         self.last_decision = time.time()
         await self.decide(mode)
@@ -75,8 +77,15 @@ class Gambler:
             return
         maybe_pin(self.d, v)
         dec = rules.gambler(v.answers, s, self.d.cfg["policy"]["gambler"], self.d.cal)
+        ht = self.halftime(t, feat, dec.action)
+        if ht is not None:
+            rec["halftime"] = ht
+            if not ht["ok"] and dec.action != "hold":
+                failed = [k for k in ("time", "price", "distance", "accel") if not ht[k]["ok"]]
+                dec.reasons = [f"halftime rule not met: {', '.join(failed)}"]
+                dec.action = "hold"
         rec["policy"] = {"action": dec.action, "reasons": dec.reasons, "scores": dec.scores}
-        self._board_judged(t, s, v, dec)
+        self._board_judged(t, s, v, dec, ht)
         if dec.action == "hold":
             logs.write("decisions", rec)
             if any(x.startswith("worth") for x in dec.reasons):
@@ -112,7 +121,17 @@ class Gambler:
         rec["intent"] = it.to_dict()
         await self.place_entry(it, mode, rec, feat)
 
-    def _board_judged(self, ticker, snapshot, v, dec):
+    def halftime(self, ticker: str, feat: dict, action: str) -> dict | None:
+        rule = profile(self.d.cfg, "gambler", series_of(ticker)).get("halftime_rule") or {}
+        if not rule.get("enabled"):
+            return None
+        side = {"buy_yes": "yes", "buy_no": "no"}.get(action) or halftime.best_side(feat)
+        fl = getattr(self.d, "flow", None)
+        spot = (fl.features().get("spot_vwap_1m") if fl else None) or self.d.und.features(
+            self.d.und.product_for(series_of(ticker))).get("spot")
+        return halftime.check(feat, spot, fl.minute_vwaps() if fl else [], side, rule)
+
+    def _board_judged(self, ticker, snapshot, v, dec, ht=None):
         """Attach the judged logic trace to the board row the dashboard shows."""
         pol = self.d.cfg["policy"]["gambler"]
         sc = dec.scores
@@ -138,6 +157,19 @@ class Gambler:
              "ok": (sc.get("exec_degraded") if sc.get("exec_degraded") is not None else 1) <= pol["exec_degraded_max"],
              "need": f"{1 - pol['exec_degraded_max']:.2f}"},
         ]
+        if ht is not None:
+            rule = profile(self.d.cfg, "gambler", series_of(ticker)).get("halftime_rule") or {}
+            sidew = "YES" if ht["side"] == "yes" else "NO"
+            gates = [
+                {"k": "ht_time", "label": "Halftime or later", "v": ht["time"]["v"], "unit": "min", "ok": ht["time"]["ok"],
+                 "need": f"{rule.get('latest_minutes', 2)}–{rule.get('half_minutes', 7.5)} min left"},
+                {"k": "ht_price", "label": f"{sidew} at {round(float(rule.get('min_price', .7)) * 100)}¢+", "v": ht["price"]["v"],
+                 "unit": "c", "ok": ht["price"]["ok"], "need": f"{round(float(rule.get('min_price', .7)) * 100)}¢"},
+                {"k": "ht_dist", "label": f"BTC ${rule.get('min_distance_usd', 100)}+ {'above' if ht['side'] == 'yes' else 'below'} target",
+                 "v": ht["distance"]["v"], "unit": "$", "ok": ht["distance"]["ok"], "need": f"${rule.get('min_distance_usd', 100)}"},
+                {"k": "ht_accel", "label": "Speeding up", "v": ht["accel"]["v"], "unit": "$/min", "ok": ht["accel"]["ok"],
+                 "need": "faster"},
+            ] + gates
         b = self.fx.board.get(NAME)
         if not b:
             return

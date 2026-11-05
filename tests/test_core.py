@@ -425,7 +425,25 @@ def test_fifteen_minute_profile():
     cfg = load_config()
     assert cfg["venue"]["universe_series"] == ["KXBTC15M"]
     f = profile(cfg, "funnel", "KXBTC15M")
-    assert f["min_minutes_to_close"] == 3 and f["max_minutes_to_close"] == 16 and f["price_ceiling"] >= 0.85
+    assert f["min_minutes_to_close"] == 2 and f["max_minutes_to_close"] == 16 and f["price_ceiling"] >= 0.85
     g = profile(cfg, "gambler", "KXBTC15M")
     assert g["exit_minutes_before_close"] == 1 and g["size_pct_equity"] == 50
     assert profile(cfg, "gambler", "KXBTCD")["exit_minutes_before_close"] == 20
+
+
+def test_halftime_rule():
+    from desk.policy import halftime
+    rule = {"half_minutes": 7.5, "latest_minutes": 2, "min_price": 0.70, "min_distance_usd": 100}
+    f = {"minutes_to_close": 6.0, "mid": 0.78, "floor_strike": 100000.0}
+    up = [100150.0, 100100.0, 100080.0]          # +50 then +20: speeding up
+    assert halftime.check(f, 100150.0, up, "yes", rule)["ok"]
+    assert not halftime.check(f, 100150.0, [100150.0, 100120.0, 100080.0], "yes", rule)["ok"]   # +30 after +40: slowing
+    assert not halftime.check(f | {"minutes_to_close": 9.0}, 100150.0, up, "yes", rule)["ok"]    # before halftime
+    assert not halftime.check(f | {"minutes_to_close": 1.5}, 100150.0, up, "yes", rule)["ok"]    # under 2 min left
+    assert not halftime.check(f | {"mid": 0.62}, 100150.0, up, "yes", rule)["ok"]               # under 70c
+    assert not halftime.check(f, 100060.0, up, "yes", rule)["ok"]                                # only $60 above
+    fn = {"minutes_to_close": 5.0, "mid": 0.20, "floor_strike": 100000.0}
+    dn = [99850.0, 99900.0, 99920.0]
+    r = halftime.check(fn, 99850.0, dn, "no", rule)
+    assert r["ok"] and r["price"]["v"] == 0.8 and r["distance"]["v"] == 150.0
+    assert not halftime.check(fn, 99850.0, [None, 99900.0, 99920.0], "no", rule)["ok"]          # no read: no trade

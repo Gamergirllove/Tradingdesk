@@ -47,6 +47,9 @@ def gambler(feat: dict, und: dict, flow: dict | None = None) -> dict:
     for k in FLOW_FIELDS:
         s[k] = flow.get(k)
     s["yes_wins_if_spot"] = {1: "rises", -1: "falls"}.get(yes_direction(feat.get("strike_type")), "range")
+    spot = flow.get("spot_vwap_1m") or und.get("spot")
+    k = feat.get("floor_strike")
+    s["spot_minus_target_usd"] = None if (spot is None or k is None) else r(spot - k, 2)
     s["fair_yes"] = feat.get("fair_yes")
     s["model_edge_c"] = feat.get("model_edge_c")
     s["spot_ret_5m_bps"] = und.get("spot_ret_5m_bps")

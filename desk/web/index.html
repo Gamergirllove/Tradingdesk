@@ -206,7 +206,7 @@ function renderPos(){
 async function posCtl(bot,action){const r=await api('/api/position',{bot,action});toast(r.msg||r.error);load()}
 
 function gatesFor(r){
- if(r.gates)return r.gates.map(g=>({label:g.label,ok:g.ok,v:g.v,need:g.need}));
+ if(r.gates)return r.gates.map(g=>({label:g.label,ok:g.ok,v:g.v,need:g.need,unit:g.unit,k:g.k}));
  if(r.stage===1)return [{label:'First checks',ok:false,v:null,txt:why(r.why),wait:false,note:why(r.why)},{label:'Judge',wait:true,txt:'not reached'}];
  const out=[{label:'Live two-sided price',ok:r.stage>2||(r.stage===2?false:true)}];
  if(r.stage>=3)out.push({label:'Fair value edge',ok:r.stage>3,v:r.edge_c,need:'±3c',unit:'c'});
@@ -216,7 +216,10 @@ function traceHTML(r){
  let firstFail=true;
  return '<div class="trace">'+gatesFor(r).map(g=>{
   let cls=g.wait?'wait':(g.ok?'ok':'fail');if(cls==='fail'&&firstFail){cls+=' first-fail';firstFail=false}
-  let val=g.wait?`<small>${esc(g.txt)}</small>`:g.note?`<small>${esc(g.note)}</small>`:(g.v==null?'<small>no read</small>':(g.unit==='c'||/edge/i.test(g.label)?`${g.v>0?'+':''}${(+g.v).toFixed(1)}c`:(+g.v).toFixed(2)));
+  const fv=v=>g.unit==='$'?`${v<0?'-':''}$${Math.abs(Math.round(v)).toLocaleString()}`:g.unit==='$/min'?`${v>0?'+':''}${Math.round(v)} $/min`:
+   g.unit==='min'?`${(+v).toFixed(1)} min`:g.unit==='c'&&g.k&&g.k.startsWith('ht_')?`${Math.round(v*100)}¢`:
+   (g.unit==='c'||/edge/i.test(g.label)?`${v>0?'+':''}${(+v).toFixed(1)}c`:(+v).toFixed(2));
+  let val=g.wait?`<small>${esc(g.txt)}</small>`:g.note?`<small>${esc(g.note)}</small>`:(g.v==null?'<small>no read</small>':fv(g.v));
   if(!g.wait&&g.need)val+=` <small>/ ${esc(g.need)}</small>`;
   return `<div class="gate ${cls}"><span class="node"></span><span class="gl">${esc(g.label)}</span><span class="gv">${val}</span></div>`}).join('')+'</div>'}
 let openCand=null;

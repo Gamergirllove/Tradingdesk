@@ -177,3 +177,15 @@ class SpotFlow:
                 ask += sum(s for p, s in b[2] if p <= hi)
             f[f"spot_book_imb_{bps}bps"] = r((bid - ask) / (bid + ask), 3) if bid + ask > 0 else None
         return f
+
+    def minute_vwaps(self, at: float | None = None, n: int = 3) -> list[float | None]:
+        """VWAP of the last n one-minute windows across live venues, newest first."""
+        at = at or time.time()
+        live = {v for v in self.venues if at - self.last_ok.get(v, 0) < 60}
+        out = []
+        for i in range(n):
+            hi, lo = at - 60 * i, at - 60 * (i + 1)
+            w = [t for t in self.trades if lo < t[0] <= hi and t[4] in live]
+            q = sum(t[2] for t in w)
+            out.append(sum(t[1] * t[2] for t in w) / q if q > 0 else None)
+        return out

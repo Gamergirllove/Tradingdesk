@@ -148,9 +148,18 @@ seats:
 
 series_profiles:              # per-series overrides on top of funnel / bots settings
   KXBTC15M:                   # "BTC up in the next 15 mins?" one market every 15 minutes
-    funnel: {min_minutes_to_close: 3, max_minutes_to_close: 16, max_spread_c: 3, min_volume_24h: 0,
+    funnel: {min_minutes_to_close: 2, max_minutes_to_close: 16, max_spread_c: 3, min_volume_24h: 0,
              min_open_interest: 0, min_history_points: 3, bench_scale: 0.05}
-    gambler: {exit_minutes_before_close: 1, max_hold_minutes: 15}
+    gambler:
+      exit_minutes_before_close: 1
+      max_hold_minutes: 15
+      decision_every_s: 20    # checks 3x a minute so a speed-up after halftime isn't missed
+      halftime_rule:          # yours: at halftime, the side at 70c+ with BTC $100+ past target and speeding up
+        enabled: true         # (both YES and NO), on top of the bot's own checks
+        half_minutes: 7.5
+        latest_minutes: 2
+        min_price: 0.70
+        min_distance_usd: 100
     house: {stop_minutes_before_close: 3}
   KXBTCD:
     funnel: {min_history_points: 20}
