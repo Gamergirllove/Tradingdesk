@@ -254,8 +254,9 @@ class Desk:
                         for bot in self.bots:
                             if self.broker_key(bot, effective_mode(self.cfg, bot)) == k and bot not in self.risk.state.halted_bots:
                                 self.risk.halt(f"daily loss limit on {k}: {pnl:.2f} USD", bot=bot)
-                                await self.alert("Daily loss limit hit", f"{bot} halted on {k} at {pnl:.2f} USD. "
-                                                 "Open the desk and APPROVE to resume.", "urgent")
+                                add = float(self.cfg["risk"].get("resume_loss_add_usd", 6))
+                                await self.alert("Daily loss limit hit", f"{bot} stopped on {k} at {pnl:.2f} USD. "
+                                                 f"Resume gives it ${add:g} more.", "urgent")
                 await self._reconcile()
                 self.judge_health = await self.judge.health()
             except Exception as e:
@@ -295,6 +296,19 @@ class Desk:
             except Exception as e:
                 logs.write("events", {"kind": "schedule_error", "error": repr(e)[:300]})
             await asyncio.sleep(60)
+
+    def bot_pnl_today(self, bot: str) -> tuple[str, float]:
+        k = self.broker_key(bot, effective_mode(self.cfg, bot))
+        e = (self.equity or {}).get(k)
+        return k, (0.0 if e is None else self.risk.day_pnl(k, e - self.manual_pnl_today(k)))
+
+    def resume_after_loss(self, bot: str) -> float | None:
+        """If the bot stopped on its daily loss limit, give it the configured extra room. Returns the new limit."""
+        why = str(self.risk.state.halted_bots.get(bot, ""))
+        if not why.startswith("daily loss limit"):
+            return None
+        k, pnl = self.bot_pnl_today(bot)
+        return self.risk.extend_loss(k, pnl, float(self.cfg["risk"].get("resume_loss_add_usd", 6)))
 
     def manual_pnl_today(self, broker_key: str) -> float:
         """Profit or loss from trades you forced by hand today (closed + open), so the daily loss limit

@@ -65,6 +65,12 @@ async def status_payload(desk) -> dict:
         bots[name] = {"mode": effective_mode(desk.cfg, name), "configured_mode": desk.cfg["bots"][name]["mode"],
                       "status": bot.status, "lock": desk.book.held(name),
                       "blocked": desk.risk.blocked(name)}
+        try:
+            k, pnl = desk.bot_pnl_today(name)
+            bots[name]["day"] = {"bot_pnl": round(pnl, 2), "loss_limit": desk.risk.loss_limit(k),
+                                 "resume_add": float(desk.cfg["risk"].get("resume_loss_add_usd", 6))}
+        except Exception:
+            pass
     pos = {}
     for k, b in list(desk.brokers.items()):
         pos[k] = {t: p.__dict__ for t, p in (await b.positions()).items()}
@@ -223,8 +229,13 @@ def create_app(desk) -> FastAPI:
             return {"ok": True, "msg": f"{bot} paused"}
         if act == "unpause":
             if bot in desk.risk.state.halted_bots or desk.risk.state.halted:
-                it = desk.approvals.request("resume", f"Resume {bot} after halt",
-                                            desk.risk.state.halted_bots.get(bot) or desk.risk.state.halt_reason,
+                why = desk.risk.state.halted_bots.get(bot) or desk.risk.state.halt_reason
+                title = f"Resume {bot} after halt"
+                if str(why).startswith("daily loss limit") and bot in desk.risk.state.halted_bots:
+                    add = float(desk.cfg["risk"].get("resume_loss_add_usd", 6))
+                    _, pnl = desk.bot_pnl_today(bot)
+                    title = f"Resume {bot} with ${add:g} more room (stops at -${max(0.0, -pnl) + add:.2f} today)"
+                it = desk.approvals.request("resume", title, why,
                                             {"bot": bot if bot in desk.risk.state.halted_bots else None})
                 return {"ok": True, "msg": "halted bots need APPROVE", "approval": it}
             desk.risk.resume(bot)

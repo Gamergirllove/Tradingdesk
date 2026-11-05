@@ -109,8 +109,9 @@ class Approvals:
             d.reload()
             return True, f"judge is now {p['to']}"
         if k == "resume":
+            lim = d.resume_after_loss(p["bot"]) if p.get("bot") else None
             d.risk.clear_halt(p.get("bot"))
-            return True, "resumed"
+            return True, "resumed" if lim is None else f"resumed: stops if today's loss reaches ${lim:.2f}"
         if k == "config_change":
             set_override(p["path"], p["value"])
             d.reload()

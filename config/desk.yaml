@@ -94,6 +94,7 @@ risk:
   max_position_contracts: 500
   max_total_exposure_usd: 100
   daily_loss_limit_usd: 5     # bot losses only (trades you force by hand don't count); halts until you approve
+  resume_loss_add_usd: 6      # each Resume after that halt allows $6 more loss from where the day stands (resets at midnight)
   min_edge_over_fees_c: 1     # taker entries: code edge must beat fees by this much per contract
   min_quote_edge_c: 0.5       # maker quotes: distance from mid minus adverse-selection estimate
   max_state_age_s: 30

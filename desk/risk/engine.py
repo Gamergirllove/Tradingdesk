@@ -44,6 +44,7 @@ class RiskState:
     paused_bots: dict = field(default_factory=dict)       # bot -> reason (reversible)
     pinned_version: str = ""
     day_start_equity: dict = field(default_factory=dict)  # mode -> equity at day start
+    loss_extra: dict = field(default_factory=dict)        # broker key -> extra loss room added by Resume today
 
 
 class RiskEngine:
@@ -119,14 +120,27 @@ class RiskEngine:
         if self.state.day != d:
             self.state.day = d
             self.state.day_start_equity = dict(equity_by_key)
+            self.state.loss_extra = {}
             self.save()
 
     def day_pnl(self, key: str, equity: float) -> float:
         start = self.state.day_start_equity.get(key)
         return 0.0 if start is None else round(equity - start, 4)
 
+    def loss_limit(self, key: str) -> float:
+        return round(float(self.cfg["risk"]["daily_loss_limit_usd"]) + float(self.state.loss_extra.get(key, 0)), 2)
+
+    def extend_loss(self, key: str, pnl: float, add: float) -> float:
+        """Resume after a loss-limit halt: allow `add` more loss from where the day stands now."""
+        base = float(self.cfg["risk"]["daily_loss_limit_usd"])
+        need = max(0.0, -pnl) + add - base
+        self.state.loss_extra[key] = round(max(float(self.state.loss_extra.get(key, 0)), need), 2)
+        self.save()
+        logs.write("events", {"kind": "loss_limit_extended", "key": key, "pnl": pnl, "limit": self.loss_limit(key)})
+        return self.loss_limit(key)
+
     def daily_loss_breached(self, key: str, equity: float) -> tuple[bool, float]:
-        lim = float(self.cfg["risk"]["daily_loss_limit_usd"])
+        lim = self.loss_limit(key)
         start = self.state.day_start_equity.get(key)
         if start is None:
             self.state.day_start_equity[key] = equity
