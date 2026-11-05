@@ -447,3 +447,26 @@ def test_halftime_rule():
     r = halftime.check(fn, 99850.0, dn, "no", rule)
     assert r["ok"] and r["price"]["v"] == 0.8 and r["distance"]["v"] == 150.0
     assert not halftime.check(fn, 99850.0, [None, 99900.0, 99920.0], "no", rule)["ok"]          # no read: no trade
+
+
+def test_halftime_on_board():
+    from types import SimpleNamespace as NS
+    from desk.bots.gambler import Gambler
+    from desk.config import load_config
+    from desk.policy.rules import Decision
+    cfg = load_config()
+    t = "KXBTC15M-26NOV041645-45"
+    flow = NS(features=lambda: {"spot_vwap_1m": 100150.0}, minute_vwaps=lambda: [100150.0, 100100.0, 100080.0])
+    und = NS(product_for=lambda s: "BTC-USD", features=lambda p: {"spot": 100140.0})
+    board = {"gambler": {"rows": [{"ticker": t}]}}
+    d = NS(cfg=cfg, flow=flow, und=und, md=None, funnel=NS(board=board))
+    g = Gambler(d)
+    feat = {"minutes_to_close": 6.0, "mid": 0.78, "floor_strike": 100000.0}
+    ht = g.halftime(t, feat, "buy_yes")
+    assert ht["ok"] and ht["distance"]["v"] == 150.0
+    assert not g.halftime(t, feat | {"minutes_to_close": 10.0}, "buy_yes")["ok"]
+    assert g.halftime("KXBTCD-26NOV0417-T80249.99", feat, "buy_yes") is None        # other series: rule off
+    dec = Decision(action="buy_yes", reasons=["all gates passed"], scores={"model_edge_c": 6.0, "action": "buy_yes"})
+    g._board_judged(t, {}, NS(backend="rules"), dec, ht)
+    gates = board["gambler"]["rows"][0]["gates"]
+    assert [x["k"] for x in gates[:4]] == ["ht_time", "ht_price", "ht_dist", "ht_accel"] and all(x["ok"] for x in gates[:4])
