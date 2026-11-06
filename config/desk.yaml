@@ -4,6 +4,7 @@
 
 desk:
   mode_ceiling: live          # highest rung any bot may run at: shadow | paper | demo | live
+  skip_demo: true             # paper goes straight to live (no demo key needed)
   timezone: America/Los_Angeles
   daily_summary_hour: 8       # local hour the daily summary is pushed
   paper_bankroll: 50          # starting cash for each paper bot

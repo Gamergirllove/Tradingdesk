@@ -12,6 +12,12 @@ ROOT = Path(__file__).resolve().parent.parent
 LADDER = ["shadow", "paper", "demo", "live"]
 
 
+def rungs(cfg: dict) -> list[str]:
+    """The ladder this desk uses; demo is skipped when desk.skip_demo is on."""
+    skip = bool((cfg.get("desk") or {}).get("skip_demo"))
+    return [m for m in LADDER if not (skip and m == "demo")]
+
+
 def data_dir() -> Path:
     d = Path(os.environ.get("DESK_DATA", ROOT / "data"))
     d.mkdir(parents=True, exist_ok=True)

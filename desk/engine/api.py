@@ -13,7 +13,7 @@ from fastapi import FastAPI, Request
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 
 from .. import logs, secrets
-from ..config import LADDER, data_dir, effective_mode
+from ..config import rungs, LADDER, data_dir, effective_mode
 from ..venues.kalshi import KalshiClient, KalshiError, Signer
 
 WEB = Path(__file__).resolve().parent.parent / "web"
@@ -104,7 +104,7 @@ async def status_payload(desk) -> dict:
         "risk": desk.risk.state.__dict__, "equity": desk.equity, "positions": pos,
         "ai": desk.ai_spend(), "judge": desk.judge_health, "approvals": desk.approvals.pending(),
         "keys": {"kalshi": bool(desk.prod_signer), "kalshi_demo": bool(desk.demo_signer)},
-        "funnel": desk.funnel.last_stats, "public_url": desk.public_url(), "ladder": LADDER,
+        "funnel": desk.funnel.last_stats, "public_url": desk.public_url(), "ladder": rungs(desk.cfg),
         "mode_ceiling": desk.cfg["desk"]["mode_ceiling"],
         "judge_backend": desk.cfg["judge"].get("backend", "claude"),
         "boards": boards, "spot": desk.flow.features() if desk.flow else {},
@@ -251,16 +251,20 @@ def create_app(desk) -> FastAPI:
             if to not in LADDER:
                 return JSONResponse({"ok": False, "error": "bad rung"}, status_code=400)
             cur = desk.cfg["bots"][bot]["mode"]
+            from ..config import rungs
+            lad = rungs(desk.cfg)
             if LADDER.index(to) < LADDER.index(cur):
                 from ..config import set_override
                 set_override(f"bots.{bot}.mode", to)  # stepping down is always allowed
                 desk.reload()
                 return {"ok": True, "msg": f"{bot} stepped down to {to}"}
-            if LADDER.index(to) > LADDER.index(cur) + 1:
-                return JSONResponse({"ok": False, "error": f"one rung at a time: {cur} -> {LADDER[LADDER.index(cur) + 1]} first"},
+            nxt = next((m for m in lad if LADDER.index(m) > LADDER.index(cur)), None)
+            if to not in lad or to != nxt:
+                return JSONResponse({"ok": False, "error": f"one rung at a time: {cur} -> {nxt} first"},
                                     status_code=400)
             it = desk.approvals.request("mode_change", f"Move {bot} from {cur} to {to}",
-                                        "Raises real exposure. Shadow -> paper -> demo -> live, one rung at a time.",
+                                        "Trades real money on Kalshi." if to == "live" else
+                                        f"Raises real exposure. {' -> '.join(lad)}, one rung at a time.",
                                         {"bot": bot, "to": to})
             return {"ok": True, "msg": "needs APPROVE", "approval": it}
         if act == "rebuild_calibration":

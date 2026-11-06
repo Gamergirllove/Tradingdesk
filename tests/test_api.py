@@ -29,6 +29,8 @@ def test_setup_login_and_status(tmp_data):
 
 
 def test_mode_change_needs_literal_approve(tmp_data):
+    from desk.config import set_override
+    set_override("desk.skip_demo", False)          # this test walks the full ladder, demo included
     d, c = make()
     c.get("/setup")
     code = (tmp_data / "setup_code").read_text().strip()
@@ -140,3 +142,17 @@ def test_resume_after_loss_limit_adds_room(tmp_data):
     d.risk.state.day = "2000-01-01"
     d.risk.roll_day({k: 50.0})
     assert d.risk.loss_limit(k) == 5                              # new day: back to the base limit
+
+
+def test_skip_demo_paper_to_live(tmp_data):
+    d, c = make()
+    c.get("/setup")
+    c.post("/setup", json={"code": (tmp_data / "setup_code").read_text().strip(), "password": "longpassword"})
+    d.cfg["desk"]["skip_demo"] = True
+    d.cfg["bots"]["gambler"]["mode"] = "paper"
+    assert c.get("/api/status").json()["ladder"] == ["shadow", "paper", "live"]
+    r = c.post("/api/control", json={"action": "mode", "bot": "gambler", "to": "live"}).json()
+    assert r["approval"]["payload"] == {"bot": "gambler", "to": "live"}
+    assert c.post("/api/control", json={"action": "mode", "bot": "gambler", "to": "demo"}).status_code == 400
+    d.cfg["desk"]["skip_demo"] = False
+    assert c.post("/api/control", json={"action": "mode", "bot": "gambler", "to": "live"}).status_code == 400
