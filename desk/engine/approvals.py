@@ -10,7 +10,7 @@ from .. import logs, secrets
 from ..config import LADDER, data_dir, set_override
 from ..util import new_id
 
-ALLOWED_PREFIXES = ("risk.", "policy.", "funnel.", "bench_ttl_minutes.", "judge.daily_budget_usd",
+ALLOWED_PREFIXES = ("risk.", "policy.", "funnel.", "bench_ttl_minutes.", "judge.daily_budget_usd", "judge.backend",
                     "judge.mode", "bots.gambler.", "bots.house.", "desk.mode_ceiling", "venue.universe_series",
                     "seats.")
 SIZE_KEYS = ("contracts", "quote_contracts", "max_inventory", "max_order_contracts", "max_position_contracts",
@@ -113,7 +113,11 @@ class Approvals:
             d.risk.clear_halt(p.get("bot"))
             return True, "resumed" if lim is None else f"resumed: stops if today's loss reaches ${lim:.2f}"
         if k == "config_change":
+            if p["path"] == "judge.backend" and p["value"] not in ("rules", "claude"):
+                return False, "judge must be rules or claude"
             set_override(p["path"], p["value"])
+            if p["path"] == "judge.backend":
+                d.risk.pin("")
             d.reload()
             return True, f"{p['path']} = {p['value']}"
         if k == "repin":

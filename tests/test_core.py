@@ -470,3 +470,15 @@ def test_halftime_on_board():
     g._board_judged(t, {}, NS(backend="rules"), dec, ht)
     gates = board["gambler"]["rows"][0]["gates"]
     assert [x["k"] for x in gates[:4]] == ["ht_time", "ht_price", "ht_dist", "ht_accel"] and all(x["ok"] for x in gates[:4])
+
+
+def test_rules_fallback_answers_pass_the_version_pin():
+    from desk.config import load_config
+    from desk.risk.engine import Intent, RiskEngine
+    r = RiskEngine(load_config(), "America/Los_Angeles")
+    r.state.pinned_version = "claude-haiku-5-5-x"
+    mk = lambda mv: Intent(bot="gambler", ticker="KXBTC15M-X", side="bid", count=1.0, price=0.75,
+                           tif="immediate_or_cancel", expected_edge_c=8.0, model_version=mv, tag="entry")
+    why = lambda mv: r.check(mk(mv), 0, 0, 100.0)[1]
+    assert "model_version" not in why("rules-v1") and "model_version" not in why("claude-haiku-5-5-x")
+    assert "tuned on" in why("claude-other")

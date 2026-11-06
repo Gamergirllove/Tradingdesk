@@ -43,14 +43,20 @@ def test_server_malformed_never_calls_model():
     assert r.status_code == 422 and r.json()["error"] == "malformed_question" and mb.calls == 0
 
 
+def nofb():
+    cfg = load_config()
+    cfg["judge"]["fallback_to_rules"] = False
+    return cfg
+
+
 def test_server_deadline_and_budget():
-    c = TestClient(create_app(load_config(), backend=MockBackend(delay_s=2)))
+    c = TestClient(create_app(nofb(), backend=MockBackend(delay_s=2)))
     b = body()
     b["deadline_ms"] = 500
     r = c.post("/v1/battery", json=b, headers={"X-Desk-Secret": "test-secret"})
     assert r.status_code == 504 and r.json()["error"] == "deadline"
-    ledger.record("judge", 1.0)
-    c2 = TestClient(create_app(load_config(), backend=MockBackend()))
+    ledger.record("judge", 5.0)
+    c2 = TestClient(create_app(nofb(), backend=MockBackend()))
     r = c2.post("/v1/battery", json=body(), headers={"X-Desk-Secret": "test-secret"})
     assert r.status_code == 402 and r.json()["error"] == "budget_exhausted"
 
@@ -58,7 +64,7 @@ def test_server_deadline_and_budget():
 @pytest.mark.parametrize("kind,status,err", [("rate_limited", 429, "rate_limited"), ("down", 502, "down"),
                                              ("malformed", 422, "malformed_question"), ("auth", 401, "upstream_auth")])
 def test_server_maps_backend_errors(kind, status, err):
-    c = TestClient(create_app(load_config(), backend=MockBackend(fail=kind)))
+    c = TestClient(create_app(nofb(), backend=MockBackend(fail=kind)))
     r = c.post("/v1/battery", json=body(), headers={"X-Desk-Secret": "test-secret"})
     assert r.status_code == status and r.json()["error"] == err
 
@@ -128,7 +134,7 @@ def test_claude_backend_request_shape(monkeypatch):
 
 
 def test_no_credit_holds_and_never_disables():
-    c = TestClient(create_app(load_config(), backend=MockBackend(fail="no_credit")))
+    c = TestClient(create_app(nofb(), backend=MockBackend(fail="no_credit")))
     r = c.post("/v1/battery", json=body(), headers={"X-Desk-Secret": "test-secret"})
     assert r.status_code == 402 and r.json()["error"] == "no_credit"
 
@@ -164,3 +170,26 @@ def test_judge_switch_picks_up_override(tmp_data):
     set_override("judge.backend", "claude")
     h = c.get("/health").json()
     assert h["backend"] is None and h["has_key"] is False           # claude selected, no key -> holds
+
+
+@pytest.mark.parametrize("fail", ["no_credit", "rate_limited", "down", "auth"])
+def test_claude_cant_answer_rules_answer_instead(fail):
+    c = TestClient(create_app(load_config(), backend=MockBackend(fail=fail)))
+    r = c.post("/v1/battery", json=body(), headers={"X-Desk-Secret": "test-secret"})
+    j = r.json()
+    assert r.status_code == 200 and j["ok"] and j["backend"] == "rules" and j["model_version"] == "rules-v1"
+    assert j["fallback_from"] and j["cost_usd"] == 0.0
+
+
+def test_budget_reached_rules_answer_instead():
+    ledger.record("judge", 5.0)
+    mb = MockBackend()
+    c = TestClient(create_app(load_config(), backend=mb))
+    j = c.post("/v1/battery", json=body(), headers={"X-Desk-Secret": "test-secret"}).json()
+    assert j["ok"] and j["backend"] == "rules" and j["fallback_from"] == "budget_exhausted" and mb.calls == 0
+
+
+def test_malformed_never_falls_back():
+    c = TestClient(create_app(load_config(), backend=MockBackend(fail="malformed")))
+    r = c.post("/v1/battery", json=body(), headers={"X-Desk-Secret": "test-secret"})
+    assert r.status_code == 422

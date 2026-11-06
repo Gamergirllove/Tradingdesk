@@ -194,7 +194,7 @@ class RiskEngine:
                 checks.append(("economics", False, "no code-side edge estimate"))
             pin = self.state.pinned_version
             if it.model_version is not None and not it.forced:
-                checks.append(("model_version", (not pin) or it.model_version == pin,
+                checks.append(("model_version", (not pin) or it.model_version in (pin, "rules-v1"),
                                f"judge answered as {it.model_version}, thresholds tuned on {pin}"))
             if it.band and it.tag == "quote":
                 lo, hi = it.band

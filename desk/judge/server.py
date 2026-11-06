@@ -83,6 +83,10 @@ class Judge:
         return round(cap - ledger.spent(tz=self.tz), 6)
 
 
+FALLBACK_KINDS = {"no_key", "budget_exhausted", "no_credit", "rate_limited", "overloaded", "down", "deadline",
+                  "upstream_auth", "bad_output"}
+
+
 def create_app(cfg: dict | None = None, backend=None) -> FastAPI:
     cfg = cfg or load_config()
     judge = Judge(cfg, backend)
@@ -99,10 +103,29 @@ def create_app(cfg: dict | None = None, backend=None) -> FastAPI:
                 "model": judge.cfg["judge"]["model"] if getattr(b, "name", "") == "claude" else getattr(b, "version", None), "spent_today": ledger.spent(tz=judge.tz),
                 "cap": cfg["judge"].get("daily_budget_usd")}
 
+    async def rules_answer(qs, state, bot, decision_id, why: str):
+        """Claude couldn't answer: the free rules judge answers the same battery instead."""
+        res = await judge.rules.ask(qs, state)
+        answers = {q.id: normalize(q, res.raw.get(q.id)) for q in qs}
+        logs.write("judge", {"kind": "ok", "bot": bot, "decision_id": decision_id, "model": res.model_version,
+                             "latency_ms": res.latency_ms, "cost_usd": 0.0, "fallback_from": why})
+        return {"ok": True, "decision_id": decision_id, "battery_id": battery_id(qs), "answers": answers,
+                "model_version": res.model_version, "backend": "rules", "fallback_from": why,
+                "latency_ms": res.latency_ms, "wall_ms": res.latency_ms, "usage": res.usage, "cost_usd": 0.0}
+
     @app.post("/v1/battery")
     async def battery(request: Request, x_desk_secret: str | None = Header(default=None)):
         if not authed(x_desk_secret):
             return _err(401, "unauthorized")
+        r = await _battery(request)
+        if isinstance(r, tuple):             # (error response, kind, qs, state, bot, decision_id)
+            resp, kind, qs, state, bot, did = r
+            if kind in FALLBACK_KINDS and judge.cfg["judge"].get("fallback_to_rules", True) and qs is not None:
+                return await rules_answer(qs, state, bot, did, kind)
+            return resp
+        return r
+
+    async def _battery(request: Request):
         try:
             body = await request.json()
             qs = [Q.from_dict(q) for q in body["questions"]]
@@ -117,17 +140,19 @@ def create_app(cfg: dict | None = None, backend=None) -> FastAPI:
             logs.write("judge", {"kind": "malformed", "bot": bot, "errors": errs})
             return _err(422, "malformed_question", "; ".join(errs))
         b = judge.ensure_backend()
+        ctx = (qs, state, bot, decision_id)
         if b is None:
-            return _err(503, "no_key", "Anthropic API key not set")
+            return (_err(503, "no_key", "Anthropic API key not set"), "no_key", *ctx)
         est = judge.est_cost(qs, state) if getattr(b, "name", "") != "rules" else 0.0
         if est and judge.budget_left() < est:
-            return _err(402, "budget_exhausted", "daily AI budget reached", spent=ledger.spent(tz=judge.tz))
+            return (_err(402, "budget_exhausted", "daily AI budget reached", spent=ledger.spent(tz=judge.tz)),
+                    "budget_exhausted", *ctx)
         t0 = time.time()
         try:
             res = await asyncio.wait_for(b.ask(qs, state), timeout=max(0.5, deadline_ms / 1000))
         except asyncio.TimeoutError:
             logs.write("judge", {"kind": "deadline", "bot": bot, "decision_id": decision_id, "deadline_ms": deadline_ms})
-            return _err(504, "deadline", f"no answer within {deadline_ms} ms")
+            return (_err(504, "deadline", f"no answer within {deadline_ms} ms"), "deadline", *ctx)
         except BackendError as e:
             logs.write("judge", {"kind": e.kind, "bot": bot, "decision_id": decision_id, "message": str(e)[:300]})
             status = {"malformed": 422, "rate_limited": 429, "overloaded": 503, "down": 502,
@@ -135,7 +160,7 @@ def create_app(cfg: dict | None = None, backend=None) -> FastAPI:
             kind = "malformed_question" if e.kind == "malformed" else e.kind
             if e.kind == "auth":
                 kind = "upstream_auth"
-            return _err(status, kind, str(e))
+            return (_err(status, kind, str(e)), kind, *ctx)
         if res.cost_usd:
             ledger.record("judge", res.cost_usd, {"bot": bot, "model": res.model_version}, tz=judge.tz)
         answers = {q.id: normalize(q, res.raw.get(q.id)) for q in qs}
