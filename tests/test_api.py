@@ -25,7 +25,7 @@ def test_setup_login_and_status(tmp_data):
     assert c2.post("/login", json={"password": "nope"}).status_code == 403
     assert c2.post("/login", json={"password": "longpassword"}).status_code == 200
     s = c2.get("/api/status").json()
-    assert set(s["bots"]) == {"gambler", "house"} and s["bots"]["gambler"]["mode"] == "shadow"
+    assert set(s["bots"]) == {"gambler", "house", "sports"} and s["bots"]["gambler"]["mode"] == "shadow"
 
 
 def test_mode_change_needs_literal_approve(tmp_data):

@@ -58,6 +58,27 @@ bots:
     exit_minutes_before_close: 20
     max_hold_minutes: 90
     volume_exit_ratio: 0.2    # last-30m volume below 20% of its pace -> close within 60s
+  sports:
+    enabled: true
+    mode: paper
+    series: [KXNFLGAME, KXNCAAFGAME, KXNBAGAME, KXNHLGAME]
+    scan_every_s: 20
+    size_pct_equity: 50       # of the account per bet (shared with the Gambler)
+    take_profit_pct: 10       # on the contract: 60c -> 66c
+    stop_loss_pct: 5          # on the contract: 60c -> 57c
+    max_open_bets: 2
+    daily_loss_stop: false    # no daily stop for Sports; its P&L is left out of the Gambler's daily limit
+    pregame_hours: 12         # pregame bets only within 12h of the start
+    live: true                # in-game bets where ESPN has a live win probability (NFL, NBA, college FB)
+    min_edge_c: {pregame: 3, live: 5}     # fair minus Kalshi ask, after the entry fee
+    max_edge_c: {pregame: 15, live: 20}   # a bigger gap usually means stale or mismatched data
+    max_spread_c: 3
+    min_price: 0.15
+    max_price: 0.90
+    min_volume_24h: 200
+    confirm_scans: 2          # the gap has to be there on two checks in a row
+    reentry_after_stop_min: 120   # after a stop, no new bet on that game for 2 hours
+    max_live_wp_reads: 8
   house:
     enabled: false            # only one 15-minute market exists at a time; the Gambler gets it
     mode: shadow
@@ -74,6 +95,9 @@ bots:
     requote_min_change_c: 1
 
 policy:
+  sports:
+    worth_min: 0.50
+    exec_degraded_max: 0.50
   gambler:
     trend_min: 0.50
     setup_ge2_min: 0.55

@@ -16,6 +16,7 @@ from .. import ledger, logs, notify, secrets
 from ..book.positions import Bench, Book
 from ..bots.gambler import Gambler
 from ..bots.house import House
+from ..bots.sports import Sports
 from ..broker.kalshi_broker import KalshiBroker
 from ..broker.paper import PaperBroker
 from ..config import data_dir, effective_mode, get_path, load_config
@@ -67,7 +68,7 @@ class Desk:
         self.funnel_demo: Funnel | None = None
         self.brokers: dict[str, object] = {}
         self.approvals = Approvals(self)
-        self.bots = {"gambler": Gambler(self), "house": House(self)}
+        self.bots = {"gambler": Gambler(self), "house": House(self), "sports": Sports(self)}
         self.started = time.time()
         self.errors: dict[str, int] = {}
         self.recent_alerts: deque = deque(maxlen=50)
@@ -252,6 +253,8 @@ class Desk:
                                                       "bot_pnl": pnl})
                     if hit:
                         for bot in self.bots:
+                            if not self.daily_stop_on(bot):
+                                continue
                             if self.broker_key(bot, effective_mode(self.cfg, bot)) == k and bot not in self.risk.state.halted_bots:
                                 self.risk.halt(f"daily loss limit on {k}: {pnl:.2f} USD", bot=bot)
                                 add = float(self.cfg["risk"].get("resume_loss_add_usd", 6))
@@ -310,19 +313,30 @@ class Desk:
         k, pnl = self.bot_pnl_today(bot)
         return self.risk.extend_loss(k, pnl, float(self.cfg["risk"].get("resume_loss_add_usd", 6)))
 
+    def daily_stop_on(self, bot: str) -> bool:
+        return bool(self.cfg["bots"].get(bot, {}).get("daily_loss_stop", True))
+
     def manual_pnl_today(self, broker_key: str) -> float:
-        """Profit or loss from trades you forced by hand today (closed + open), so the daily loss limit
-        only measures what the bots did."""
-        from ..util import local_day, kalshi_fee
+        """Profit or loss today (closed + open) that the daily loss limit leaves out: trades you forced by hand,
+        and every trade of a bot with no daily stop (Sports). The limit only measures the bots that have one."""
+        from ..util import local_day
         mode = {"demo": "demo", "live": "live"}.get(broker_key, "paper")
         tot = 0.0
+
+        def left_out(bot, manual, lead_id):
+            return manual or str(lead_id or "").startswith("force_") or not self.daily_stop_on(bot or "")
+
         for r in logs.read("trades", local_day(self.tz)):
-            manual = r.get("manual") or str(r.get("lead_id", "")).startswith("force_")
-            if manual and r.get("mode") == mode and r.get("pnl_after_fees") is not None:
+            if left_out(r.get("bot"), r.get("manual"), r.get("lead_id")) and r.get("mode") == mode \
+                    and r.get("pnl_after_fees") is not None:
                 if mode != "paper" or broker_key == f"paper_{r.get('bot')}":
                     tot += float(r["pnl_after_fees"])
-        lk = self.book.held("gambler")
-        if lk and (lk.get("manual") or str(lk.get("lead_id", "")).startswith("force_")) and lk.get("mode") == mode and (mode != "paper" or broker_key == "paper_gambler"):
+        for key, lk in list(self.book.locks.items()):
+            bot = lk.get("bot") or key.split(":")[0]
+            if lk.get("entry") is None or lk.get("mode") != mode or not left_out(bot, lk.get("manual"), lk.get("lead_id")):
+                continue
+            if mode == "paper" and broker_key != f"paper_{bot}":
+                continue
             bk = self.md_for(mode).st(lk["ticker"]).book
             if bk and bk.mid is not None:
                 long_yes = lk.get("side") == "bid"

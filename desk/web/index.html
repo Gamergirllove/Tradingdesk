@@ -5,7 +5,7 @@
 <link rel="manifest" href="/manifest.webmanifest"><title>Desk</title>
 <link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Barlow:wght@400;500;600&family=Chakra+Petch:wght@500;600;700&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="/static/base.css?v=hud2">
+<link rel="stylesheet" href="/static/base.css?v=hud3">
 <style>
 .hud{display:flex;align-items:baseline;justify-content:space-between;gap:12px;margin:8px 0 14px}
 .hud h1{font-size:26px}
@@ -57,6 +57,10 @@
 details.card summary{list-style:none;cursor:pointer;display:flex;justify-content:space-between;align-items:center;font:600 15px var(--display);min-height:30px}
 details.card summary::-webkit-details-marker{display:none}
 .botset{border-top:1px solid var(--line);padding-top:12px;margin-top:12px}
+.cand .team{font:600 19px/1.2 var(--display)}
+.live{color:var(--red);font:700 11px var(--display);letter-spacing:.04em;margin-right:6px}
+.live::before{content:"";display:inline-block;width:7px;height:7px;border-radius:50%;background:var(--red);margin-right:5px;vertical-align:1px}
+.src{font-size:12px;color:var(--mist);margin-top:4px}
 </style></head>
 <body>
 <div class="wrap">
@@ -68,6 +72,9 @@ details.card summary::-webkit-details-marker{display:none}
     <div id="posCard"></div>
     <div class="sect"><h2>Possible trades</h2><span id="scanAge" class="small dim"></span></div>
     <div id="scanList"></div>
+    <div class="sect"><h2>Sports</h2><span id="spAge" class="small dim"></span></div>
+    <div id="spBets"></div>
+    <div id="spList"></div>
     <div id="houseCard"></div>
     <details class="card" id="botSet"><summary>Bots and modes<span class="dim small" id="botSum"></span></summary><div id="bots"></div></details>
     <div class="card"><div class="row"><h2 style="margin:0">Live profit toward Claude credit</h2><span id="msTxt" class="num dim"></span></div>
@@ -206,7 +213,7 @@ function renderPos(){
 async function posCtl(bot,action){const r=await api('/api/position',{bot,action});toast(r.msg||r.error);load()}
 
 function gatesFor(r){
- if(r.gates)return r.gates.map(g=>({label:g.label,ok:g.ok,v:g.v,need:g.need,unit:g.unit,k:g.k}));
+ if(r.gates)return r.gates.map(g=>({label:g.label,ok:g.ok,v:g.v,need:g.need,unit:g.unit,k:g.k,note:g.note}));
  if(r.stage===1)return [{label:'First checks',ok:false,v:null,txt:why(r.why),wait:false,note:why(r.why)},{label:'Judge',wait:true,txt:'not reached'}];
  const out=[{label:'Live two-sided price',ok:r.stage>2||(r.stage===2?false:true)}];
  if(r.stage>=3)out.push({label:'Fair value edge',ok:r.stage>3,v:r.edge_c,need:'±3c',unit:'c'});
@@ -217,7 +224,9 @@ function traceHTML(r){
  return '<div class="trace">'+gatesFor(r).map(g=>{
   let cls=g.wait?'wait':(g.ok?'ok':'fail');if(cls==='fail'&&firstFail){cls+=' first-fail';firstFail=false}
   const fv=v=>g.unit==='$'?`${v<0?'-':''}$${Math.abs(Math.round(v)).toLocaleString()}`:g.unit==='$/min'?`${v>0?'+':''}${Math.round(v)} $/min`:
-   g.unit==='min'?`${(+v).toFixed(1)} min`:g.unit==='c'&&g.k&&g.k.startsWith('ht_')?`${Math.round(v*100)}¢`:
+   g.unit==='min'?(Math.abs(v)>=90?`${(v/60).toFixed(1)} h`:`${(+v).toFixed(1)} min`):g.unit==='c'&&g.k&&g.k.startsWith('ht_')?`${Math.round(v*100)}¢`:
+   g.unit==='p'?cents(v):g.unit==='n'?Math.round(v).toLocaleString():
+   (g.unit==='c'&&!['edge','cap'].includes(g.k)&&!/edge/i.test(g.label))?`${(+v).toFixed(1)}c`:
    (g.unit==='c'||/edge/i.test(g.label)?`${v>0?'+':''}${(+v).toFixed(1)}c`:(+v).toFixed(2));
   let val=g.wait?`<small>${esc(g.txt)}</small>`:g.note?`<small>${esc(g.note)}</small>`:(g.v==null?'<small>no read</small>':fv(g.v));
   if(!g.wait&&g.need)val+=` <small>/ ${esc(g.need)}</small>`;
@@ -247,6 +256,59 @@ function renderScan(){
 async function force(ev,ticker,side,seen){ev.stopPropagation();
  const pct=S.gambler_cfg.size_pct_equity;if(!arm('f'+ticker+side,ev.target,`Tap again: ${pct}% of the account`))return;
  const r=await api('/api/force',{ticker,side,seen_price:seen});toast(r.msg||r.error);load()}
+
+// ---------- sports ----------
+const tm=ts=>new Date(ts*1000).toLocaleString([], {weekday:'short',hour:'numeric',minute:'2-digit'});
+function ladderHTML(stop,entry,tp,mark,ride,tpLabel){
+ const vals=[stop,entry,tp,mark].filter(v=>v!=null);const lo=Math.min(...vals)-0.01,hi=Math.max(...vals)+0.01;
+ const pos=v=>((v-lo)/(hi-lo)*100).toFixed(1)+'%';
+ return `<div class="ladder"><div class="track"></div>
+  ${stop!=null?`<div class="mk stop" style="left:${pos(stop)}">stop ${cents(stop)}<i></i></div>`:''}
+  <div class="mk entry" style="left:${pos(entry)}">in ${cents(entry)}<i></i></div>
+  ${tp!=null?`<div class="mk tp ${ride?'off':''}" style="left:${pos(tp)}">${tpLabel} ${cents(tp)}<i></i></div>`:''}
+  ${mark!=null?`<div class="mk mark" style="left:${pos(mark)}"><i></i>now ${cents(mark)}</div>`:''}</div>`}
+function renderSportsBets(){
+ const sp=S.sports;if(!sp||!sp.bets.length){$('spBets').innerHTML='';return}const c=sp.cfg||{};
+ $('spBets').innerHTML=sp.bets.map(b=>{const up=b.upnl||0,ride=!!b.ride;const live=b.state==='in';
+  return `<div class="card pos"><div class="row"><span class="pill warn">${esc(b.team)} x${Math.round(b.qty)}</span>
+   <span class="small dim">${esc(b.mode)}${ride?', riding':''}</span></div>
+   <div style="margin-top:10px;font:600 16px var(--display)">${live?'<span class="live">LIVE</span>':''}${esc(b.league)}, ${esc(b.game)}${b.clock?', '+esc(b.clock):''}</div>
+   <div class="pnl num" style="margin-top:12px;color:${up>=0?'var(--teal)':'var(--red)'}">${up>=0?'+':''}${money(up)}</div>
+   <div class="small dim">if sold now, after the entry fee</div>
+   ${ladderHTML(b.stop,b.entry,b.tp,b.mark,ride,'+'+c.take_profit_pct+'%')}
+   <div class="grid2" style="margin-top:22px"><button class="danger" onclick="spStop(event,'${esc(b.ticker)}')">Stop now</button>
+    <button class="act ${ride?'':'ghost'}" onclick="spCtl('${esc(b.ticker)}','${ride?'unride':'ride'}')">${ride?'Riding: tap to restore +'+c.take_profit_pct+'%':'Let it ride'}</button></div></div>`}).join('')}
+let openSp=null;
+function renderSports(){
+ const sp=S.sports,bot=S.bots.sports;if(!sp||!bot){$('spList').innerHTML='';$('spAge').textContent='';return}
+ renderSportsBets();
+ const b=sp.board||{},rows=b.rows||[],st=b.stats||{};
+ $('spAge').textContent=b.ts?`${st.matched||0} games, ${st.live||0} live, ${Math.max(0,Math.round(Date.now()/1000-b.ts))}s ago`:'';
+ if(bot.status&&bot.status.state==='disabled'){$('spList').innerHTML='<div class="card dim">Sports is off.</div>';return}
+ if(!rows.length){$('spList').innerHTML=`<div class="card dim">${b.ts?'No NFL, NBA, NHL or college football games on Kalshi in the next day with a price to compare.':'Loading games…'}</div>`;return}
+ const canForce=bot.mode!=='shadow';
+ $('spList').innerHTML=rows.map(r=>{
+  const open=openSp?openSp===r.ticker:r.ready;const e=r.edge_c;const ec=e==null?'none':(e>=0?'':'neg');
+  const when=r.phase==='live'?`<span class="live">LIVE</span>${esc(r.clock||'')}`:(r.start_ts?'starts '+tm(r.start_ts):'');
+  const verdict=r.held?'<b>You hold this.</b>':r.ready?'<b>Passes every check.</b> Betting on the next check.':
+   (r.judged?`<b>Holding.</b> ${esc((r.reasons||[])[0]||'')}`:`Waiting on: <b>${esc(r.why)}</b>`);
+  return `<div class="card cand ${r.ready?'picked':''}" data-sp="${esc(r.ticker)}">
+   <div class="row" style="align-items:flex-start"><div><div class="team">${esc(r.team)} to win</div>
+    <div class="when">${esc(r.league)}, ${esc(r.game)}, ${when}</div></div>
+    <span class="edge ${ec}">${e==null?'no read':(e>=0?'+':'')+e.toFixed(1)+'¢'}</span></div>
+   <div class="quote"><span>Kalshi <b>${cents(r.bid)} / ${cents(r.ask)}</b></span><span>fair <b>${r.fair==null?'–':cents(r.fair)}</b></span></div>
+   ${r.fair_source?`<div class="src">${esc(r.fair_source)}</div>`:''}
+   <div class="verdict">${verdict}</div>
+   ${open?traceHTML(r)+(canForce&&!r.held?`<div style="margin-top:12px"><button class="act ghost" onclick="spForce(event,'${esc(r.ticker)}',${r.ask==null?'null':r.ask})">Force buy ${esc(r.team)} ${cents(r.ask)}</button></div>`:
+     (r.held?'':`<p class="small dim" style="margin:10px 0 0">Move Sports to paper or higher to force bets.</p>`)):''}
+  </div>`}).join('');
+ document.querySelectorAll('[data-sp]').forEach(el=>el.addEventListener('click',ev=>{if(ev.target.closest('button'))return;
+  openSp=openSp===el.dataset.sp?'__none':el.dataset.sp;renderSports()}))}
+async function spForce(ev,ticker,seen){ev.stopPropagation();
+ const pct=(S.sports.cfg||{}).size_pct_equity;if(!arm('sp'+ticker,ev.target,`Tap again: ${pct}% of the account`))return;
+ const r=await api('/api/force',{bot:'sports',ticker,seen_price:seen});toast(r.msg||r.error);load()}
+async function spCtl(ticker,action){const r=await api('/api/position',{bot:'sports',ticker,action});toast(r.msg||r.error);load()}
+function spStop(ev,ticker){if(arm('sps'+ticker,ev.target,'Tap again to sell'))spCtl(ticker,'stop')}
 
 function renderHouse(){
  const h=S.bots.house;if(!h){$('houseCard').innerHTML='';return}const st=h.status||{},lk=h.lock;
@@ -278,8 +340,9 @@ async function load(){
  if(tab==='desk')renderDesk();if(tab==='appr')renderAppr();if(tab==='log')renderLog();if(tab==='rep')renderRep();if(tab==='set')renderSet()}
 function renderDesk(){
  const g=S.bots.gambler;const eqKey=g?(g.mode==='paper'?'paper_gambler':g.mode):null;const eq=eqKey?S.equity[eqKey]:null;
- $('hudLine').innerHTML=`<span>Gambler <b>${esc(g?g.mode:'–')}</b></span><span>Judge <b>${S.judge_backend==='rules'?'rules':'Claude'}</b></span>${eq!=null?`<span>Account <b>${money(eq)}</b></span>`:''}`;
- renderScope();renderPos();renderScan();renderHouse();
+ const spb=S.bots.sports;
+ $('hudLine').innerHTML=`<span>Gambler <b>${esc(g?g.mode:'–')}</b></span>${spb?`<span>Sports <b>${esc(spb.mode)}</b></span>`:''}<span>Judge <b>${S.judge_backend==='rules'?'rules':'Claude'}</b></span>${eq!=null?`<span>Account <b>${money(eq)}</b></span>`:''}`;
+ renderScope();renderPos();renderScan();renderSports();renderHouse();
  const bs=$('bots');const was=bs.innerHTML;const nb=Object.entries(S.bots).map(([k,v])=>botCard(k,v)).join('');if(was!==nb)bs.innerHTML=nb;
  $('botSum').textContent=Object.entries(S.bots).map(([k,v])=>`${k} ${v.configured_mode}`).join(', ');
  const ms=S.milestone||5,lp=S.live_profit||0;$('msTxt').textContent=`${money(lp)} of ${money(ms)}`;

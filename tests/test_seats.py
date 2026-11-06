@@ -47,7 +47,7 @@ def test_seat_tools_against_engine(tmp_data, monkeypatch):
     async def go():
         st = await t["desk_status"].handler({})
         body = json.loads(st["content"][0]["text"])
-        assert set(body["bots"]) == {"gambler", "house"} and "public_url" not in body
+        assert set(body["bots"]) == {"gambler", "house", "sports"} and "public_url" not in body
         r = await t["pause_bot"].handler({"bot": "house", "reason": "test"})
         assert json.loads(r["content"][0]["text"])["ok"]
         r = await t["propose_change"].handler({"path": "policy.gambler.action_conf_min", "value": "0.65",

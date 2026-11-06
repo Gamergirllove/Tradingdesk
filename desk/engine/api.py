@@ -111,6 +111,7 @@ async def status_payload(desk) -> dict:
         "paper_bankroll": desk.cfg["desk"].get("paper_bankroll", 50),
         "gambler_cfg": {k: desk.cfg["bots"]["gambler"].get(k) for k in ("size_pct_equity", "take_profit_pct", "stop_c")},
         "live_profit": desk.live_profit(),
+        "sports": desk.bots["sports"].view() if "sports" in desk.bots else None,
         "milestone": desk.cfg["desk"].get("ai_credit_milestone_usd", 5),
     }
 
@@ -299,8 +300,11 @@ def create_app(desk) -> FastAPI:
             return deny()
         b = await req.json()
         seen = b.get("seen_price")
-        ok, msg = await desk.bots["gambler"].force(str(b.get("ticker", "")), str(b.get("side", "")),
-                                                   float(seen) if seen is not None else None)
+        if b.get("bot") == "sports":
+            ok, msg = await desk.bots["sports"].force(str(b.get("ticker", "")), float(seen) if seen is not None else None)
+        else:
+            ok, msg = await desk.bots["gambler"].force(str(b.get("ticker", "")), str(b.get("side", "")),
+                                                       float(seen) if seen is not None else None)
         logs.write("events", {"kind": "force_trade", "ticker": b.get("ticker"), "side": b.get("side"), "ok": ok, "msg": msg})
         return {"ok": ok, "msg": msg}
 
@@ -317,6 +321,8 @@ def create_app(desk) -> FastAPI:
             ok, msg = True, "Ending the House session"
         elif bot == "gambler":
             ok, msg = desk.bots["gambler"].control(str(act))
+        elif bot == "sports":
+            ok, msg = desk.bots["sports"].control(str(b.get("ticker", "")), str(act))
         else:
             return JSONResponse({"ok": False, "error": "unknown bot"}, status_code=400)
         logs.write("events", {"kind": "position_control", "bot": bot, "action": act, "ok": ok})

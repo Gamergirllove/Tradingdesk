@@ -27,6 +27,9 @@ Rules:
   fair_yes minus mid, in cents. spot_cvd_*_btc is aggregated taker buy minus sell volume in BTC across spot
   exchanges; spot_book_imb_*bps is (bid depth - ask depth) / total within that distance of mid, in [-1, 1];
   yes_wins_if_spot says whether YES pays when BTC rises or falls.
+  Sports states: fair_yes is the team's fair win chance from fair_source (a sportsbook moneyline with the margin
+  removed before the game, or ESPN's live win probability during it); model_edge_c is fair_yes minus the Kalshi
+  ask, in cents, before fees; phase is pregame or live; score_diff is this team's score minus the opponent's.
 Return only the JSON object the schema asks for."""
 
 
