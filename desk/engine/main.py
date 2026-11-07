@@ -300,6 +300,19 @@ class Desk:
                 logs.write("events", {"kind": "schedule_error", "error": repr(e)[:300]})
             await asyncio.sleep(60)
 
+    def own_pnl_today(self, bot: str, mode: str) -> float:
+        """One bot's own P&L today: closed trades plus open bets marked to the bid."""
+        from ..util import local_day
+        tot = sum(float(r["pnl_after_fees"]) for r in logs.read("trades", local_day(self.tz))
+                  if r.get("bot") == bot and r.get("mode") == mode and r.get("pnl_after_fees") is not None)
+        for key, lk in list(self.book.locks.items()):
+            if (lk.get("bot") or key.split(":")[0]) != bot or lk.get("mode") != mode or lk.get("entry") is None:
+                continue
+            bk = self.md_for(mode).st(lk["ticker"]).book
+            if bk and bk.best_bid is not None and lk.get("side") == "bid":
+                tot += (bk.best_bid - lk["entry"]) * lk.get("qty", 0) - (lk.get("entry_fee") or 0)
+        return round(tot, 4)
+
     def bot_pnl_today(self, bot: str) -> tuple[str, float]:
         k = self.broker_key(bot, effective_mode(self.cfg, bot))
         e = (self.equity or {}).get(k)

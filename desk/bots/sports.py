@@ -420,7 +420,7 @@ class Sports:
                 rule, px, maker = "take_profit", lk["tp"], True
             else:
                 rule, px, maker = "flat", None, False
-            self._log_trade(lk, rule, px, maker_exit=maker, settled=rule == "settled")
+            self._log_trade(lk, rule, px, maker_exit=maker, settled=rule == "settled", real=await self._real(lk, broker))
             self.d.book.release(key, rule, lk["lead_id"])
             if rule in ("take_profit", "settled"):
                 await self.d.alert("Sports bet closed", f"{mode}: {lk.get('team')} {rule} @ {px:.2f}")
@@ -488,9 +488,9 @@ class Sports:
         ack = await broker.place(it, book)
         logs.write("orders", {"kind": "exit", "rule": rule, "mode": mode, "intent": it.to_dict(), "ack": ack.__dict__})
         after = await broker.position(t)
-        if after.qty == 0:
+        if after.qty == 0 or (ack.ok and ack.filled >= abs(pos.qty) - 1e-9):
             self.exit_tries.pop(t, None)
-            self._log_trade(lk, rule, ack.avg_price or px, ack_fee=ack.fee)
+            self._log_trade(lk, rule, ack.avg_price or px, ack_fee=ack.fee, real=await self._real(lk, broker))
             self.d.book.release(key, f"exit:{rule}", lk["lead_id"])
             if rule in ("stop", "manual_stop"):          # no buying the same game back right after a stop
                 self.d.bench.bench(f"{NAME}:{lk.get('event_ticker')}", "sports_stopped",
@@ -499,16 +499,30 @@ class Sports:
         else:
             self.exit_tries[t] = tries + 1
 
-    def _log_trade(self, lk, rule, exit_px, maker_exit=False, settled=False, ack_fee=None):
+    async def _real(self, lk, broker) -> dict | None:
+        if lk.get("mode") not in ("live", "demo") or not hasattr(broker, "realized"):
+            return None
+        return await broker.realized(lk["ticker"], lk.get("opened", time.time() - 86400), "yes")
+
+    def _log_trade(self, lk, rule, exit_px, maker_exit=False, settled=False, ack_fee=None, real=None):
         entry, qty = lk.get("entry"), lk.get("qty", 0)
         pnl = None
-        if exit_px is not None and entry is not None:
+        if real and real.get("buy_qty"):
+            # Real money: Kalshi's own fills are the record (price improvement and actual fees included).
+            entry = real["avg_buy"]
+            payout = real["proceeds"]
+            if settled and exit_px is not None:
+                payout += max(0.0, real["buy_qty"] - real["sell_qty"]) * exit_px
+            elif real["avg_sell"] is not None:
+                exit_px = real["avg_sell"]
+            pnl = payout - real["cost"] - real["fees"]
+        elif exit_px is not None and entry is not None:
             ft, fm = lk.get("fee_type", "quadratic"), lk.get("fee_mult", 1.0)
             exit_fee = 0.0 if settled else (ack_fee if ack_fee is not None and lk.get("mode") == "paper"
                                             else kalshi_fee(exit_px, qty, ft, fm, maker=maker_exit))
             entry_fee = lk.get("entry_fee") if lk.get("mode") == "paper" else kalshi_fee(entry, qty, ft, fm)
             pnl = (exit_px - entry) * qty - (entry_fee or 0) - exit_fee
-        logs.write("trades", {"bot": NAME, "lead_id": lk["lead_id"], "manual": bool(lk.get("manual")),
+        logs.write("trades", {"bot": NAME, "lead_id": lk["lead_id"], "manual": bool(lk.get("manual")), "from_fills": bool(real),
                               "ticker": lk["ticker"], "side": "bid", "team": lk.get("team"), "game": lk.get("game"),
                               "qty": qty, "entry": entry, "exit": exit_px, "rule": rule, "pnl_after_fees": r(pnl, 4),
                               "mode": lk.get("mode"), "fair_at_entry": lk.get("fair_at_entry"),

@@ -66,9 +66,14 @@ async def status_payload(desk) -> dict:
                       "status": bot.status, "lock": desk.book.held(name),
                       "blocked": desk.risk.blocked(name)}
         try:
+            if not desk.daily_stop_on(name):
+                bots[name]["day"] = {"bot_pnl": round(desk.own_pnl_today(name, bots[name]["mode"]), 2), "loss_limit": None}
+                raise StopIteration
             k, pnl = desk.bot_pnl_today(name)
             bots[name]["day"] = {"bot_pnl": round(pnl, 2), "loss_limit": desk.risk.loss_limit(k),
                                  "resume_add": float(desk.cfg["risk"].get("resume_loss_add_usd", 6))}
+        except StopIteration:
+            pass
         except Exception:
             pass
     pos = {}

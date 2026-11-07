@@ -179,3 +179,58 @@ def test_stop_benches_the_game(monkeypatch):
     assert not sp.locks()
     row = next(x for x in sp.board["rows"] if x["team"] == "Phoenix")
     assert row["why"] == "Bet slot free" and any(g.get("note") == "stopped out of this game" for g in row["gates"])
+
+
+def test_live_exit_trusts_the_fill_and_logs_real_fills(monkeypatch):
+    """Kalshi's positions can trail a fill: the bot must not sell again, and P&L comes from Kalshi's fills."""
+    from desk.broker.kalshi_broker import KalshiBroker
+    from desk import logs
+    from desk.util import local_day
+
+    class FakeClient:
+        def __init__(self):
+            self.pos, self.orders, self.fill_rows = [], [], []
+
+        async def create_order(self, ticker, side, count, price, coid, post_only=False, tif="", reduce_only=False):
+            self.orders.append((side, count, price, tif))
+            if tif == "immediate_or_cancel":
+                px = price + 0.01 if side == "ask" else price            # price improvement
+                self.fill_rows.append({"action": "buy" if side == "bid" else "sell", "count_fp": str(count),
+                                       "yes_price_dollars": f"{px:.4f}", "fee_cost": "0.4500"})
+                return {"order_id": f"o{len(self.orders)}", "fill_count": count, "remaining_count": 0}
+            return {"order_id": f"o{len(self.orders)}", "fill_count": 0, "remaining_count": count}
+
+        async def positions(self):
+            return self.pos                                               # stale: never shows the exit
+
+        async def resting_orders(self, ticker=None):
+            return []
+
+        async def cancel_order(self, oid, t):
+            return {}
+
+        async def fills(self, min_ts=None, ticker=None):
+            return self.fill_rows
+
+        async def balance(self):
+            return {"balance": 1700, "portfolio_value": 0}
+
+    d, sp, state, ev = sports_desk(monkeypatch, ask=0.50)
+    fc = FakeClient()
+    kb = KalshiBroker(fc, "live")
+    monkeypatch.setattr(d, "broker_for", lambda bot, mode: kb)
+    run(sp.scan("live")); run(sp.scan("live"))
+    t = f"{ev}-PHX"
+    lk = d.book.held(f"sports:{t}")
+    assert lk and lk["mode"] == "live"
+    fc.pos = [{"ticker": t, "position_fp": str(lk["qty"]), "market_exposure_dollars": str(lk["qty"] * 0.5)}]
+    kb._pos_cache, kb._hold_until = (0.0, {}), 0
+    state["ask"] = 0.47                                                  # stop
+    run(sp.step())
+    sells = [o for o in fc.orders if o[0] == "ask" and o[3] == "immediate_or_cancel"]
+    assert len(sells) == 1 and not d.book.held(f"sports:{t}")
+    run(sp.step())
+    assert len([o for o in fc.orders if o[0] == "ask" and o[3] == "immediate_or_cancel"]) == 1   # never sold twice
+    tr = [x for x in logs.read("trades", local_day(d.tz)) if x["bot"] == "sports"][-1]
+    q = lk["qty"]
+    assert tr["from_fills"] and tr["exit"] == 0.47 and abs(tr["pnl_after_fees"] - (q * (0.47 - 0.50) - 0.90)) < 1e-6

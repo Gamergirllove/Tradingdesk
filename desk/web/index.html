@@ -328,7 +328,7 @@ function botCard(name,b){
   <span class="pill ${stateColor(st.state)}">${esc(sw(st.state))}</span></div>
   ${b.mode!==rung?`<p class="small dim" style="margin:6px 0 0">Running at ${b.mode}: ${b.mode==='shadow'?'mode ceiling':'missing key'}</p>`:''}
   <div class="seg" style="grid-template-columns:repeat(${S.ladder.length},1fr)">${seg}</div>
-  ${b.day?`<p class="small dim" style="margin:8px 0 0">Today ${b.day.bot_pnl<0?'-':'+'}$${Math.abs(b.day.bot_pnl).toFixed(2)} of -$${b.day.loss_limit.toFixed(2)} allowed</p>`:''}
+  ${b.day?`<p class="small dim" style="margin:8px 0 0">Today ${b.day.bot_pnl<0?'-':'+'}$${Math.abs(b.day.bot_pnl).toFixed(2)}${b.day.loss_limit==null?', no daily stop':` of -$${b.day.loss_limit.toFixed(2)} allowed`}</p>`:''}
   <div style="margin-top:10px">${b.blocked?`<button onclick="ctl('unpause','${name}')">${/daily loss limit/.test(b.blocked)&&b.day?`Resume with $${b.day.resume_add} more`:`Resume ${name}`}</button>`:`<button class="ghost" onclick="ctl('pause','${name}')">Pause ${name}</button>`}</div>
   ${b.blocked?`<p class="small" style="color:var(--amber);margin:8px 0 0">${esc(b.blocked)}</p>`:''}</div>`}
 function tabTo(t){document.querySelector(`.tabs button[data-t="${t}"]`).click()}

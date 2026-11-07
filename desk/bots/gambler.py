@@ -308,11 +308,12 @@ class Gambler:
         if pos.qty == 0:
             for o in opens:
                 await broker.cancel(o["order_id"], t)
+            real = await self._real(lock, broker)
             if lock.get("tp_order"):
-                self._log_trade(lock, None, "take_profit", exit_px=lock["tp"], maker_exit=True)
+                self._log_trade(lock, None, "take_profit", exit_px=lock["tp"], maker_exit=True, real=real)
                 await self.d.alert("Gambler hit take profit", f"{mode}: {t} @ {lock['tp']:.2f}")
             else:
-                self._log_trade(lock, None, "flat")
+                self._log_trade(lock, None, "flat", real=real)
             self.d.book.release(NAME, "take_profit" if lock.get("tp_order") else "flat", lock["lead_id"])
             self.status = {"state": "idle", "mode": mode}
             return
@@ -418,21 +419,33 @@ class Gambler:
         ack = await broker.place(it, book)
         logs.write("orders", {"kind": "exit", "rule": rule, "mode": mode, "intent": it.to_dict(), "ack": ack.__dict__})
         after = await broker.position(lock["ticker"])
-        if after.qty == 0:
+        if after.qty == 0 or (ack.ok and ack.filled >= abs(pos.qty) - 1e-9):
             self.exit_tries = 0
-            self._log_trade(lock, ack, rule)
+            self._log_trade(lock, ack, rule, real=await self._real(lock, broker))
             self.d.book.release(NAME, f"exit:{rule}", lock["lead_id"])
             self.status = {"state": "idle", "mode": mode, "last_exit": rule}
             await self.d.alert("Gambler exited", f"{mode}: {rule} on {lock['ticker']} @ {px:.2f}")
         else:
             self.exit_tries += 1
 
-    def _log_trade(self, lock, ack, rule, exit_px=None, maker_exit=False):
+    async def _real(self, lock, broker) -> dict | None:
+        if lock.get("mode") not in ("live", "demo") or not hasattr(broker, "realized"):
+            return None
+        return await broker.realized(lock["ticker"], lock.get("opened", time.time() - 86400),
+                                     "yes" if lock.get("side") == "bid" else "no")
+
+    def _log_trade(self, lock, ack, rule, exit_px=None, maker_exit=False, real=None):
         entry, qty = lock.get("entry"), lock.get("qty", 0)
         if exit_px is None:
             exit_px = ack.avg_price if ack and ack.avg_price else None
         pnl = None
-        if exit_px is not None and entry is not None:
+        if real and real.get("buy_qty") and real.get("sell_qty"):
+            # Real money: Kalshi's own fills are the record (price improvement and actual fees included).
+            entry, exit_px = real["avg_buy"], real["avg_sell"]
+            if lock["side"] != "bid":                       # the lock keeps NO trades in YES terms
+                entry, exit_px = round(1 - entry, 4), round(1 - exit_px, 4)
+            pnl = real["proceeds"] - real["cost"] - real["fees"]
+        elif exit_px is not None and entry is not None:
             pnl = (exit_px - entry) * qty if lock["side"] == "bid" else (entry - exit_px) * qty
             ft, fm = lock.get("fee_type", "quadratic"), lock.get("fee_mult", 1.0)
             exit_fee = kalshi_fee(exit_px, qty, ft, fm, maker=maker_exit)
@@ -442,6 +455,6 @@ class Gambler:
                 fees = (lock.get("entry_fee") or 0) + ((ack.fee or 0) if ack else exit_fee)
             pnl -= fees
         logs.write("trades", {"bot": NAME, "lead_id": lock["lead_id"], "manual": bool(lock.get("manual")),
-                              "ticker": lock["ticker"], "side": lock["side"],
+                              "from_fills": bool(real and real.get("sell_qty")), "ticker": lock["ticker"], "side": lock["side"],
                               "qty": qty, "entry": entry, "exit": exit_px, "rule": rule, "pnl_after_fees": r(pnl, 4),
                               "mode": lock.get("mode"), "held_s": round(time.time() - lock.get("opened", time.time()))})

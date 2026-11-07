@@ -39,7 +39,22 @@ class KalshiBroker:
         if oid and remaining > 0:
             self.owned[oid] = {"ticker": it.ticker, "side": it.side, "price": it.price, "remaining": remaining,
                                "ts": time.time(), "bot": it.bot, "tag": it.tag}
-        self._pos_cache = (0.0, {})
+        if filled > 0:
+            # Kalshi's positions endpoint can trail a fill by a few seconds; apply our own fill now so a closed
+            # position is never sold again.
+            ts, cache = self._pos_cache
+            cache = dict(cache)
+            old = cache.get(it.ticker, Pos())
+            q = round(old.qty + (filled if it.side == "bid" else -filled), 6)
+            if abs(q) < 1e-9:
+                cache.pop(it.ticker, None)
+            else:
+                cache[it.ticker] = Pos(qty=q, avg=old.avg if old.qty else it.price, realized=old.realized,
+                                       fees=old.fees, extra=old.extra)
+            self._pos_cache = (time.time(), cache)
+            self._hold_until = time.time() + 6
+        else:
+            self._pos_cache = (0.0, self._pos_cache[1])
         return Ack(True, order_id=oid, client_order_id=coid, status=status, filled=filled,
                    avg_price=it.price if filled else None)
 
@@ -85,7 +100,7 @@ class KalshiBroker:
 
     async def positions(self) -> dict[str, Pos]:
         ts, cache = self._pos_cache
-        if time.time() - ts < 5:
+        if time.time() - ts < 5 or time.time() < getattr(self, "_hold_until", 0):
             return cache
         try:
             rows = await self.c.positions()
@@ -125,6 +140,31 @@ class KalshiBroker:
         b = await self._balance()
         v = fnum(b.get("balance"))
         return None if v is None else v / 100.0
+
+    async def realized(self, ticker: str, since_ts: float, holding: str = "yes") -> dict | None:
+        """What actually happened on Kalshi for one position: fills since it opened, in the held contract's price."""
+        try:
+            rows = await self.c.fills(min_ts=int(since_ts) - 60, ticker=ticker)
+        except KalshiError:
+            return None
+        bq = bc = sq = sp = fees = 0.0
+        for f in rows:
+            n = fnum(f.get("count_fp") or f.get("count"), 0.0)
+            y = fnum(f.get("yes_price_dollars") or f.get("yes_price"), None)
+            if y is None or not n:
+                continue
+            if y > 1:
+                y /= 100
+            px = y if holding == "yes" else 1 - y
+            fees += fnum(f.get("fee_cost") or f.get("fee_cost_dollars"), 0.0)
+            if f.get("action") == "buy":
+                bq, bc = bq + n, bc + n * px
+            elif f.get("action") == "sell":
+                sq, sp = sq + n, sp + n * px
+        if not bq:
+            return None
+        return {"buy_qty": bq, "avg_buy": round(bc / bq, 4), "sell_qty": sq, "avg_sell": round(sp / sq, 4) if sq else None,
+                "cost": round(bc, 4), "proceeds": round(sp, 4), "fees": round(fees, 4)}
 
     def on_market(self, ticker: str, book, new_trades):
         return None
