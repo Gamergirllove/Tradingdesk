@@ -11,7 +11,7 @@ from ..config import LADDER, data_dir, set_override
 from ..util import new_id
 
 ALLOWED_PREFIXES = ("risk.", "policy.", "funnel.", "bench_ttl_minutes.", "judge.daily_budget_usd", "judge.backend",
-                    "judge.mode", "bots.gambler.", "bots.house.", "desk.mode_ceiling", "venue.universe_series",
+                    "judge.mode", "bots.gambler.", "bots.house.", "bots.sports.", "desk.mode_ceiling", "venue.universe_series",
                     "seats.")
 SIZE_KEYS = ("contracts", "quote_contracts", "max_inventory", "max_order_contracts", "max_position_contracts",
              "max_total_exposure_usd", "daily_loss_limit_usd")
