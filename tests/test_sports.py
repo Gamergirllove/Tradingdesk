@@ -73,8 +73,9 @@ def sports_desk(monkeypatch, phase="pre", home_ml="-150", away_ml="+130", ask=0.
     state = {"ask": ask}
     mk = lambda: [kmkt(ev, "PHX", "Phoenix", state["ask"] - 0.01, state["ask"]),
                   kmkt(ev, "SAS", "San Antonio", 1 - state["ask"] - 0.01, 1 - state["ask"] + 0.01)]
+    state["phase"] = "pre" if phase == "pre" else "in"
     game = lambda: espn_event("401", ("Phoenix", "Suns", "PHX"), ("San Antonio", "Spurs", "SA"), start,
-                              state="pre" if phase == "pre" else "in", home_ml=home_ml, away_ml=away_ml, wp=wp)
+                              state=state["phase"], home_ml=home_ml, away_ml=away_ml, wp=wp)
 
     async def universe(series, max_age=0):
         out = mk()
@@ -115,8 +116,12 @@ def test_pregame_edge_bets_after_two_checks_then_takes_profit(monkeypatch):
     lk = d.book.held(f"sports:{ev}-PHX")
     assert lk and lk["entry"] == 0.50 and lk["tp"] == 0.55 and lk["stop"] == 0.47 and lk["qty"] > 0
     assert d.judge.calls == 1
-    run(sp.step())                                          # rests the take-profit as a maker order
+    run(sp.step())                                          # pregame: no take-profit resting yet
+    assert not d.book.held(f"sports:{ev}-PHX").get("tp_order")
+    state["phase"] = "in"; run(sp.scan("paper"))
+    run(sp.step())                                          # game on: rests the take-profit as a maker order
     assert d.book.held(f"sports:{ev}-PHX").get("tp_order")
+    state["phase"] = "in"; run(sp.scan("paper"))     # the game has started: exits are on
     state["ask"] = 0.57                                     # bid 0.56 >= 0.55 target
     run(sp.step())
     assert not d.book.held(f"sports:{ev}-PHX")
@@ -129,6 +134,7 @@ def test_stop_loss_and_no_daily_stop(monkeypatch):
     d, sp, state, ev = sports_desk(monkeypatch)
     run(sp.scan("paper")); run(sp.scan("paper"))
     assert d.book.held(f"sports:{ev}-PHX")
+    state["phase"] = "in"; run(sp.scan("paper"))     # the game has started: exits are on
     state["ask"] = 0.47                                     # bid 0.46 <= stop 0.47
     run(sp.step())
     assert not d.book.held(f"sports:{ev}-PHX")
@@ -172,13 +178,15 @@ def test_force_and_controls(monkeypatch):
 def test_stop_benches_the_game(monkeypatch):
     d, sp, state, ev = sports_desk(monkeypatch)
     run(sp.scan("paper")); run(sp.scan("paper"))
+    state["phase"] = "in"; run(sp.scan("paper"))     # the game has started: exits are on
     state["ask"] = 0.47
     run(sp.step())
     sp.last_scan = 0
     run(sp.step())
     assert not sp.locks()
     row = next(x for x in sp.board["rows"] if x["team"] == "Phoenix")
-    assert row["why"] == "Bet slot free" and any(g.get("note") == "stopped out of this game" for g in row["gates"])
+    slot = next(g for g in row["gates"] if g["k"] == "slot")
+    assert not slot["ok"] and slot["note"] == "stopped out of this game"
 
 
 def test_live_exit_trusts_the_fill_and_logs_real_fills(monkeypatch):
@@ -225,6 +233,7 @@ def test_live_exit_trusts_the_fill_and_logs_real_fills(monkeypatch):
     assert lk and lk["mode"] == "live"
     fc.pos = [{"ticker": t, "position_fp": str(lk["qty"]), "market_exposure_dollars": str(lk["qty"] * 0.5)}]
     kb._pos_cache, kb._hold_until = (0.0, {}), 0
+    state["phase"] = "in"; run(sp.scan("live"))
     state["ask"] = 0.47                                                  # stop
     run(sp.step())
     sells = [o for o in fc.orders if o[0] == "ask" and o[3] == "immediate_or_cancel"]
@@ -234,3 +243,27 @@ def test_live_exit_trusts_the_fill_and_logs_real_fills(monkeypatch):
     tr = [x for x in logs.read("trades", local_day(d.tz)) if x["bot"] == "sports"][-1]
     q = lk["qty"]
     assert tr["from_fills"] and tr["exit"] == 0.47 and abs(tr["pnl_after_fees"] - (q * (0.47 - 0.50) - 0.90)) < 1e-6
+
+
+
+def test_pregame_bet_waits_for_the_start(monkeypatch):
+    d, sp, state, ev = sports_desk(monkeypatch)
+    run(sp.scan("paper")); run(sp.scan("paper"))
+    k = f"sports:{ev}-PHX"
+    assert d.book.held(k)
+    for ask in (0.60, 0.40):                                # past the take-profit, then past the stop: still held
+        state["ask"] = ask
+        run(sp.step())
+        assert d.book.held(k) and not d.book.held(k).get("tp_order")
+    assert sp.view()["bets"][0]["waiting_for_start"]
+    state["phase"] = "in"; state["ask"] = 0.47; run(sp.scan("paper"))
+    run(sp.step())                                          # started and below the stop: sells
+    assert not d.book.held(k)
+
+
+def test_stop_now_works_before_the_start(monkeypatch):
+    d, sp, state, ev = sports_desk(monkeypatch)
+    run(sp.scan("paper")); run(sp.scan("paper"))
+    assert sp.control(f"{ev}-PHX", "stop")[0]
+    run(sp.step())
+    assert not d.book.held(f"sports:{ev}-PHX")

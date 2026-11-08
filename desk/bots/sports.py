@@ -351,6 +351,7 @@ class Sports:
                 "opened": time.time(), "mode": mode, "fee_type": it.fee_type, "fee_mult": it.fee_mult,
                 "entry_fee": ack.fee, "event_ticker": x["event_ticker"], "espn_id": x["espn_id"], "path": x["path"],
                 "game": x["game"], "team": x["team"], "league": x["league"], "fair_at_entry": x["fair"],
+                "start_ts": x.get("start_ts"),
                 "fair_source": x["fair_source"], "phase_at_entry": x["phase"], "manual": forced})
             self.status = {"state": "in_position", "mode": mode, "ticker": t}
             await self.d.alert("Sports bet placed", f"{mode}: {x['team']} ({x['game']}) x{ack.filled:.0f} @ "
@@ -432,6 +433,16 @@ class Sports:
                 await md.refresh_meta(t)
                 self.d.book.update(key, meta_ts=time.time())
             return                                       # trading has stopped; it settles on its own
+        if not self.started(lk, g):
+            # Bet placed before the game: no take-profit and no stop until it starts (Stop now still works).
+            mine = [o for o in opens if o.get("order_id") == lk.get("tp_order")]
+            for o in mine:
+                await broker.cancel(o["order_id"], t)
+            if lk.get("tp_order"):
+                self.d.book.update(key, tp_order=None)
+            if lk.get("manual_stop"):
+                await self._exit(key, lk, pos, book, "manual_stop", broker, mode)
+            return
         await self._ensure_tp(key, lk, pos, broker, book, opens, mode)
         rule = None
         if lk.get("manual_stop"):
@@ -443,6 +454,15 @@ class Sports:
                 rule = "stop"
         if rule:
             await self._exit(key, lk, pos, book, rule, broker, mode)
+
+    def started(self, lk: dict, g: dict | None = None) -> bool:
+        """Has the game this bet is on started? ESPN's game state first, the scheduled start as a fallback."""
+        if not self.cfg.get("hold_until_start", True) or lk.get("phase_at_entry") == "live":
+            return True
+        g = g if g is not None else self.games.get(lk.get("espn_id"))
+        if g and g.get("state") in ("pre", "in", "post"):
+            return g["state"] != "pre"
+        return bool(lk.get("start_ts")) and time.time() >= lk["start_ts"]
 
     async def _ensure_tp(self, key, lk, pos, broker, book, opens, mode):
         mine = [o for o in opens if o.get("order_id") == lk.get("tp_order")]
@@ -541,6 +561,7 @@ class Sports:
             g = self.games.get(lk.get("espn_id"))
             if g:
                 b["clock"], b["state"] = g.get("detail"), g.get("state")
+            b["waiting_for_start"] = not self.started(lk, g)
             bets.append(b)
         rows = []
         for x in self.board.get("rows", []):

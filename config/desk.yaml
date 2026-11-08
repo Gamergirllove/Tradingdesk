@@ -78,6 +78,7 @@ bots:
     min_volume_24h: 200
     confirm_scans: 2          # the gap has to be there on two checks in a row
     reentry_after_stop_min: 120   # after a stop, no new bet on that game for 2 hours
+    hold_until_start: true    # a bet placed before the game isn't sold (no take-profit, no stop) until it starts
     max_live_wp_reads: 8
   house:
     enabled: false            # only one 15-minute market exists at a time; the Gambler gets it
