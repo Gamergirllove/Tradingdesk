@@ -52,7 +52,7 @@ bots:
     mode: shadow              # rung: shadow -> paper -> demo -> live
     decision_every_s: 60
     size_pct_equity: 50       # stake per trade as % of the account, from rules, never from model confidence
-    take_profit_pct: 5        # +5% on the contract held, rested as a post-only maker order (0 fee)
+    take_profit_pct: 15       # +15% on the contract held (capped at 99c), rested as a post-only maker order
     stop_c: 5
     stop_buffer_c: 1          # stop goes beyond the recent swing low/high, not at a round number
     exit_minutes_before_close: 20

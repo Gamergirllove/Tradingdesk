@@ -251,6 +251,7 @@ def test_gambler_tp_and_sizing():
     from desk.bots.gambler import Gambler
     from desk.engine.main import Desk
     d = Desk()
+    d.cfg["bots"]["gambler"]["take_profit_pct"] = 5    # these tests check the arithmetic at +5%
     g = Gambler(d)
     assert g.tp_price("bid", 0.40) == 0.42            # +5% on YES
     assert g.tp_price("ask", 0.60) == 0.58            # NO bought at 0.40 -> NO 0.42 -> YES 0.58
@@ -292,6 +293,7 @@ def test_gambler_take_profit_roundtrip_paper():
     from desk.engine.main import Desk
     from desk.venues.kalshi import Book as KB
     d = Desk()
+    d.cfg["bots"]["gambler"]["take_profit_pct"] = 5    # these tests check the arithmetic at +5%
     d.cfg["bots"]["gambler"]["mode"] = "paper"
     g = Gambler(d)
     book = KB("T", time.time(), bids=[(0.39, 500)], asks=[(0.40, 500)])
@@ -346,6 +348,7 @@ def test_force_ride_stop_paper():
     from desk.engine.main import Desk
     from desk.venues.kalshi import Book as KB
     d = Desk()
+    d.cfg["bots"]["gambler"]["take_profit_pct"] = 5    # these tests check the arithmetic at +5%
     d.cfg["bots"]["gambler"]["mode"] = "paper"
     g = d.bots["gambler"]
     book = KB("KXBTCD-X-T1", time.time(), bids=[(0.49, 500)], asks=[(0.50, 500)])
@@ -518,3 +521,12 @@ def test_halftime_rule_decides_15m_without_ai(monkeypatch):
     monkeypatch.setattr(g, "halftime", lambda tk, f, a: bad)
     asyncio.run(g.decide_by_rule(t, cand, feat, {}, "lead_y", "paper"))
     assert len(placed) == 1 and g.status["reasons"] == ["halftime rule not met: accel"]
+
+
+
+def test_gambler_live_target_is_15pct():
+    from desk.engine.main import Desk
+    d = Desk()
+    g = d.bots["gambler"]
+    assert g.tp_price("bid", 0.70) == 0.81 and g.tp_price("bid", 0.90) == 0.99   # capped at 99c
+    assert g.tp_price("ask", 0.30) == 0.19                                      # NO at 0.70 -> NO 0.81
