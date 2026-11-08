@@ -68,7 +68,7 @@ bots:
     stop_loss_pct: 5          # on the contract: 60c -> 57c
     max_open_bets: 2
     daily_loss_stop: false    # no daily stop for Sports; its P&L is left out of the Gambler's daily limit
-    pregame_hours: 12         # pregame bets only within 12h of the start
+    pregame_minutes: 1        # pregame bets only in the last minute before the start (until ESPN shows it started)
     live: true                # in-game bets where ESPN has a live win probability (NFL, NBA, college FB)
     min_edge_c: {pregame: 3, live: 5}     # fair minus Kalshi ask, after the entry fee
     max_edge_c: {pregame: 15, live: 20}   # a bigger gap usually means stale or mismatched data

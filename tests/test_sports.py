@@ -67,7 +67,7 @@ def sports_desk(monkeypatch, phase="pre", home_ml="-150", away_ml="+130", ask=0.
     d.cfg["bots"]["sports"]["mode"] = "paper"
     sp = d.bots["sports"]
     now = time.time()
-    start = dt.datetime.fromtimestamp(now + (3600 if phase == "pre" else -3600), dt.timezone.utc).strftime("%Y-%m-%dT%H:%MZ")
+    start = dt.datetime.fromtimestamp(now + (45 if phase == "pre" else -3600), dt.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
     day = dt.datetime.now(dt.timezone(dt.timedelta(hours=-5))).date()
     ev = f"KXNBAGAME-{day:%y}{day.strftime('%b').upper()}{day:%d}SASPHX"
     state = {"ask": ask}
@@ -267,3 +267,18 @@ def test_stop_now_works_before_the_start(monkeypatch):
     assert sp.control(f"{ev}-PHX", "stop")[0]
     run(sp.step())
     assert not d.book.held(f"sports:{ev}-PHX")
+
+
+
+def test_pregame_bets_only_in_the_last_minute(monkeypatch):
+    d, sp, state, ev = sports_desk(monkeypatch)
+    sp.games.clear()
+    import desk.bots.sports as S
+    orig = S.parse_game
+    monkeypatch.setattr(S, "parse_game", lambda e: dict(orig(e), start_ts=time.time() + 600))   # 10 min out
+    run(sp.scan("paper")); run(sp.scan("paper"))
+    row = next(x for x in sp.board["rows"] if x["team"] == "Phoenix")
+    assert not sp.locks() and row["why"] == "Pregame" and row["gates"][0]["need"] == "1 min before start"
+    monkeypatch.setattr(S, "parse_game", lambda e: dict(orig(e), start_ts=time.time() - 120))   # past the time, not started
+    run(sp.scan("paper")); run(sp.scan("paper"))
+    assert sp.locks()

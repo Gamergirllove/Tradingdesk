@@ -68,7 +68,7 @@ def parse_game(e: dict) -> dict:
 
 
 class Espn:
-    def __init__(self, ttl_pre: float = 120, ttl_live: float = 20, ttl_summary: float = 15, timeout: float = 10):
+    def __init__(self, ttl_pre: float = 45, ttl_live: float = 20, ttl_summary: float = 15, timeout: float = 10):
         self.ttl_pre, self.ttl_live, self.ttl_summary = ttl_pre, ttl_live, ttl_summary
         self._sb: dict[tuple, tuple[float, list, bool]] = {}
         self._sum: dict[tuple, tuple[float, float | None]] = {}

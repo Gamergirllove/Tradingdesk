@@ -180,10 +180,10 @@ class Sports:
         mn = float((c.get("min_edge_c") or {}).get(ph, 3))
         mx = float((c.get("max_edge_c") or {}).get(ph, 15))
         when_ok = (x["phase"] == "pregame" and x["minutes_to_start"] is not None
-                   and 0 <= x["minutes_to_start"] <= float(c["pregame_hours"]) * 60) or \
+                   and x["minutes_to_start"] <= float(c.get("pregame_minutes", 1))) or \
                   (x["phase"] == "live" and c.get("live", True) and x["path"] in LIVE_WP)
         if x["phase"] == "pregame":
-            when_need = f"starts within {c['pregame_hours']}h"
+            when_need = f"{c.get('pregame_minutes', 1):g} min before start"
         elif x["phase"] == "live":
             when_need = "live, ESPN win prob" if x["path"] in LIVE_WP else "no live price for NHL"
         else:
@@ -571,4 +571,4 @@ class Sports:
             rows.append(x)
         return {"bets": bets, "board": dict(self.board, rows=rows),
                 "cfg": {k: self.cfg.get(k) for k in ("size_pct_equity", "take_profit_pct", "stop_loss_pct",
-                                                      "max_open_bets", "pregame_hours")}}
+                                                      "max_open_bets", "pregame_minutes")}}
