@@ -275,10 +275,12 @@ function renderSportsBets(){
    <div style="margin-top:10px;font:600 16px var(--display)">${live?'<span class="live">LIVE</span>':''}${esc(b.league)}, ${esc(b.game)}${b.clock?', '+esc(b.clock):''}</div>
    <div class="pnl num" style="margin-top:12px;color:${up>=0?'var(--teal)':'var(--red)'}">${up>=0?'+':''}${money(up)}</div>
    <div class="small dim">if sold now, after the entry fee</div>
-   ${wait?`<p class="small" style="margin:10px 0 0;color:var(--amber)">Holding until the game starts${b.start_ts?' ('+tm(b.start_ts)+')':''}. Take-profit and stop turn on at the start.</p>`:''}
+   ${b.tp==null&&b.stop==null?`<p class="small" style="margin:10px 0 0;color:var(--amber)">Holding to the final${wait&&b.start_ts?', starts '+tm(b.start_ts):''}. Pays $1 a contract if ${esc(b.team)} wins.</p>`:
+     (wait?`<p class="small" style="margin:10px 0 0;color:var(--amber)">Holding until the game starts${b.start_ts?' ('+tm(b.start_ts)+')':''}. Take-profit and stop turn on at the start.</p>`:'')}
    ${ladderHTML(b.stop,b.entry,b.tp,b.mark,ride||wait,'+'+c.take_profit_pct+'%')}
-   <div class="grid2" style="margin-top:22px"><button class="danger" onclick="spStop(event,'${esc(b.ticker)}')">Stop now</button>
-    <button class="act ${ride?'':'ghost'}" onclick="spCtl('${esc(b.ticker)}','${ride?'unride':'ride'}')">${ride?'Riding: tap to restore +'+c.take_profit_pct+'%':'Let it ride'}</button></div></div>`}).join('')}
+   ${b.tp==null?`<div style="margin-top:22px"><button class="danger" onclick="spStop(event,'${esc(b.ticker)}')">Stop now</button></div>`:
+   `<div class="grid2" style="margin-top:22px"><button class="danger" onclick="spStop(event,'${esc(b.ticker)}')">Stop now</button>
+    <button class="act ${ride?'':'ghost'}" onclick="spCtl('${esc(b.ticker)}','${ride?'unride':'ride'}')">${ride?'Riding: tap to restore +'+c.take_profit_pct+'%':'Let it ride'}</button></div>`}</div>`}).join('')}
 let openSp=null;
 function renderSports(){
  const sp=S.sports,bot=S.bots.sports;if(!sp||!bot){$('spList').innerHTML='';$('spAge').textContent='';return}

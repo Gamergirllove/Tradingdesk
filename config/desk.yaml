@@ -63,14 +63,14 @@ bots:
     mode: paper
     series: [KXNFLGAME, KXNCAAFGAME, KXNBAGAME, KXNHLGAME]
     scan_every_s: 20
-    size_pct_equity: 50       # of the account per bet (shared with the Gambler)
-    take_profit_pct: 10       # on the contract: 60c -> 66c
-    stop_loss_pct: 5          # on the contract: 60c -> 57c
+    size_pct_equity: 20       # of the account per bet; holding to the final, a loss costs the whole stake
+    take_profit_pct: 0        # 0 = no take-profit: hold to the final (tested best on 7 days of games)
+    stop_loss_pct: 0          # 0 = no stop (the -5% stop hit 56% of the time in live games)
     max_open_bets: 2
     daily_loss_stop: false    # no daily stop for Sports; its P&L is left out of the Gambler's daily limit
     pregame_minutes: 1        # pregame bets only in the last minute before the start (until ESPN shows it started)
-    live: true                # in-game bets where ESPN has a live win probability (NFL, NBA, college FB)
-    min_edge_c: {pregame: 3, live: 5}     # fair minus Kalshi ask, after the entry fee
+    live: false               # pregame only (last minute before the start); true allows in-game bets
+    min_edge_c: {pregame: 0, live: 5}     # fair minus Kalshi ask, after the entry fee: never pay over fair
     max_edge_c: {pregame: 15, live: 20}   # a bigger gap usually means stale or mismatched data
     max_spread_c: 3
     min_price: 0.80           # fees and the -5% stop make cheaper contracts need 70-85%+ wins to break even
@@ -179,16 +179,18 @@ series_profiles:              # per-series overrides on top of funnel / bots set
     funnel: {min_minutes_to_close: 2, max_minutes_to_close: 16, max_spread_c: 3, min_volume_24h: 0,
              min_open_interest: 0, min_history_points: 3, bench_scale: 0.05}
     gambler:
-      exit_minutes_before_close: 1
+      exit_minutes_before_close: 0   # no time exit: hold to the result unless the target or stop hits
       max_hold_minutes: 15
-      decision_every_s: 20    # checks 3x a minute so a speed-up after halftime isn't missed
-      halftime_rule:          # yours: at halftime, the side at 70c+ with BTC $100+ past target and speeding up
-        enabled: true         # (both YES and NO)
+      stop_fixed_c: 10        # stop 10c below the entry on the contract held
+      decision_every_s: 20
+      halftime_rule:          # tested on 7 days of 15-min markets (664): 23 trades, 91% wins, $30 -> $70
+        enabled: true         # both YES and NO
         decides: true         # the rule alone decides (no AI checks); the risk engine's hard limits still apply
-        half_minutes: 7.5
-        latest_minutes: 2
-        min_price: 0.70
-        min_distance_usd: 100
+        half_minutes: 4       # enter only in the last 4 minutes...
+        latest_minutes: 2     # ...and not under 2 minutes left
+        min_price: 0.75       # that side at 75c+ (the funnel skips 92c+)
+        min_distance_usd: 100 # BTC $100+ past the target on that side
+        require_accel: false  # speed-up shown but not required (it cut winners in the test)
     house: {stop_minutes_before_close: 3}
   KXBTCD:
     funnel: {min_history_points: 20}

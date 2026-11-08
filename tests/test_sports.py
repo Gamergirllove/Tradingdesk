@@ -65,7 +65,9 @@ def sports_desk(monkeypatch, phase="pre", home_ml="-150", away_ml="+130", ask=0.
     from desk.engine.main import Desk
     d = Desk(judge=FakeJudge())
     d.cfg["bots"]["sports"]["mode"] = "paper"
-    d.cfg["bots"]["sports"]["min_price"] = 0.15          # these tests price around 50c; the live floor is 80c
+    d.cfg["bots"]["sports"].update({                     # these tests check the mechanics at the earlier settings
+        "min_price": 0.15, "take_profit_pct": 10, "stop_loss_pct": 5, "live": True, "size_pct_equity": 50,
+        "min_edge_c": {"pregame": 3, "live": 5}})
     sp = d.bots["sports"]
     now = time.time()
     start = dt.datetime.fromtimestamp(now + (45 if phase == "pre" else -3600), dt.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
@@ -309,3 +311,31 @@ def test_realized_waits_for_trailing_fills():
     kb = KalshiBroker(C(), "live")
     r = run(kb.realized("T", 0, "yes", wait_s=0))
     assert C.n == 3 and r["sell_qty"] == 12 and abs(r["proceeds"] - r["cost"] - r["fees"] - (-0.8752)) < 1e-6
+
+
+
+def test_hold_to_final_settles(monkeypatch):
+    """Live settings: pregame only, no take-profit, no stop, 20% per bet; the bet settles at the final."""
+    from desk import logs
+    from desk.util import local_day
+    from desk.config import load_config
+    c = load_config()["bots"]["sports"]
+    assert c["take_profit_pct"] == 0 and c["stop_loss_pct"] == 0 and c["size_pct_equity"] == 20 and c["live"] is False
+    d, sp, state, ev = sports_desk(monkeypatch, ask=0.50)
+    d.cfg["bots"]["sports"].update({"take_profit_pct": 0, "stop_loss_pct": 0, "size_pct_equity": 20})
+    run(sp.scan("paper")); run(sp.scan("paper"))
+    k, t = f"sports:{ev}-PHX", f"{ev}-PHX"
+    lk = d.book.held(k)
+    assert lk and lk["tp"] is None and lk["stop"] is None
+    assert lk["qty"] * 0.5 <= 50 * 0.2 + 0.5                     # about 20% of the $50 paper bankroll
+    state["phase"] = "in"; run(sp.scan("paper"))
+    for ask in (0.95, 0.20):                                     # big swings: no sale either way
+        state["ask"] = ask
+        run(sp.step())
+        assert d.book.held(k) and not d.book.held(k).get("tp_order")
+    d.md.st(t).meta = dict(d.md.st(t).meta, status="finalized", result="yes")
+    d.brokers["paper_sports"].settle(t, "yes")
+    run(sp.step())
+    assert not d.book.held(k)
+    tr = [x for x in logs.read("trades", local_day(d.tz)) if x["bot"] == "sports"][-1]
+    assert tr["rule"] == "settled" and tr["exit"] == 1.0 and tr["pnl_after_fees"] > 0

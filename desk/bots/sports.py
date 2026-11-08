@@ -302,12 +302,13 @@ class Sports:
         unit = px + 0.07 * px * (1 - px) * fee_mult
         return max(0, int(stake // unit)) if unit > 0 else 0
 
-    def exits_for(self, entry: float) -> tuple[float, float]:
-        tp_pct = float(self.cfg.get("take_profit_pct", 10)) / 100
-        sl_pct = float(self.cfg.get("stop_loss_pct", 5)) / 100
-        tp = min(0.99, max(entry + 0.01, math.ceil(round(entry * (1 + tp_pct) * 100, 6)) / 100))
-        sl = max(0.01, min(entry - 0.01, math.floor(round(entry * (1 - sl_pct) * 100, 6)) / 100))
-        return round(tp, 2), round(sl, 2)
+    def exits_for(self, entry: float) -> tuple[float | None, float | None]:
+        """Take-profit and stop prices; a 0 (or missing) percentage means none: hold to the final."""
+        tp_pct = float(self.cfg.get("take_profit_pct") or 0) / 100
+        sl_pct = float(self.cfg.get("stop_loss_pct") or 0) / 100
+        tp = round(min(0.99, max(entry + 0.01, math.ceil(round(entry * (1 + tp_pct) * 100, 6)) / 100)), 2) if tp_pct else None
+        sl = round(max(0.01, min(entry - 0.01, math.floor(round(entry * (1 - sl_pct) * 100, 6)) / 100)), 2) if sl_pct else None
+        return tp, sl
 
     async def open_bet(self, x: dict, mode: str, rec: dict, model_version: str | None, did: str, forced: bool):
         t, md = x["ticker"], self.d.md
@@ -448,9 +449,9 @@ class Sports:
         if lk.get("manual_stop"):
             rule = "manual_stop"
         elif book is not None and book.best_bid is not None:
-            if not lk.get("ride") and book.best_bid >= lk["tp"]:
+            if not lk.get("ride") and lk.get("tp") is not None and book.best_bid >= lk["tp"]:
                 rule = "take_profit"
-            elif book.best_bid <= lk["stop"]:
+            elif lk.get("stop") is not None and book.best_bid <= lk["stop"]:
                 rule = "stop"
         if rule:
             await self._exit(key, lk, pos, book, rule, broker, mode)
@@ -466,7 +467,7 @@ class Sports:
 
     async def _ensure_tp(self, key, lk, pos, broker, book, opens, mode):
         mine = [o for o in opens if o.get("order_id") == lk.get("tp_order")]
-        if lk.get("ride"):
+        if lk.get("ride") or lk.get("tp") is None:
             for o in mine:
                 await broker.cancel(o["order_id"], lk["ticker"])
             if lk.get("tp_order"):
@@ -498,7 +499,7 @@ class Sports:
         if pos.qty == 0:
             return
         tries = self.exit_tries.get(t, 0)
-        px = round(min(0.99, max(0.01, (book.best_bid if book and book.best_bid else lk["stop"]) - min(tries, 5) / 100)), 2)
+        px = round(min(0.99, max(0.01, (book.best_bid if book and book.best_bid else (lk.get("stop") or lk["entry"] - 0.05)) - min(tries, 5) / 100)), 2)
         it = Intent(bot=NAME, ticker=t, side="ask", count=abs(pos.qty), price=px, tif="immediate_or_cancel",
                     reduce_only=True, fee_type=lk.get("fee_type", "quadratic"), fee_mult=lk.get("fee_mult", 1.0),
                     decision_id=lk["lead_id"], tag="exit")

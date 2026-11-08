@@ -22,7 +22,7 @@ def check(feat: dict, spot: float | None, vwaps: list, side: str, rule: dict) ->
         "price": {"v": side_px, "ok": side_px is not None and side_px >= pmin},
         "distance": {"v": None if dist is None else round(dist, 2), "ok": dist is not None and dist >= dmin},
         "accel": {"v": None if d1 is None else round(d1 - d2, 2), "d1": None if d1 is None else round(d1, 2),
-                  "ok": d1 is not None and d1 > 0 and d1 > d2},
+                  "ok": (d1 is not None and d1 > 0 and d1 > d2) or not rule.get("require_accel", True)},
     }
     out["ok"] = all(x["ok"] for x in out.values())
     out["side"] = side

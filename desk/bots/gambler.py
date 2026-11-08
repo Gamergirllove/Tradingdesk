@@ -1,6 +1,8 @@
 """The Gambler: bets on direction. One position at a time; exits are arithmetic, never re-judged."""
 from __future__ import annotations
 
+import asyncio
+
 import math
 import time
 
@@ -11,7 +13,7 @@ from ..questions.gambler import BATTERY
 from ..risk.engine import Intent
 from ..state import snapshot as snap
 from ..state.snapshot import with_fair
-from ..util import kalshi_fee, r
+from ..util import parse_ts, kalshi_fee, r
 from .common import handle_verdict_failure, maybe_pin
 
 NAME = "gambler"
@@ -179,8 +181,9 @@ class Gambler:
              "need": f"{mp}¢"},
             {"k": "ht_dist", "label": f"BTC ${rule.get('min_distance_usd', 100)}+ {'above' if ht['side'] == 'yes' else 'below'} target",
              "v": ht["distance"]["v"], "unit": "$", "ok": ht["distance"]["ok"], "need": f"${rule.get('min_distance_usd', 100)}"},
-            {"k": "ht_accel", "label": "Speeding up", "v": ht["accel"]["v"], "unit": "$/min", "ok": ht["accel"]["ok"],
-             "need": "faster"},
+            {"k": "ht_accel", "label": "Speeding up" if rule.get("require_accel", True) else "Speed (not required)",
+             "v": ht["accel"]["v"], "unit": "$/min", "ok": ht["accel"]["ok"],
+             "need": "faster" if rule.get("require_accel", True) else "any"},
         ]
         b = self.fx.board.get(NAME)
         if not b:
@@ -349,7 +352,10 @@ class Gambler:
             lo, hi = feat.get("lo_60m"), feat.get("hi_60m")
             pc = profile(self.d.cfg, "gambler", series_of(it.ticker))
             sc, buf = pc["stop_c"] / 100, pc["stop_buffer_c"] / 100
-            if it.side == "bid":
+            if pc.get("stop_fixed_c"):                      # a flat stop: entry -10c on the contract held
+                fx = float(pc["stop_fixed_c"]) / 100
+                stop = entry - fx if it.side == "bid" else entry + fx
+            elif it.side == "bid":
                 swing = (lo - buf) if lo is not None else entry - sc
                 stop = max(entry - 2 * sc, min(entry - sc, swing))
             else:
@@ -377,7 +383,14 @@ class Gambler:
         if pos.qty == 0:
             for o in opens:
                 await broker.cancel(o["order_id"], t)
-            real = await self._real(lock, broker)
+            real = await self._real(lock, broker, closed=False)
+            settled = await self._settled_value(lock, real)
+            if settled is not None:
+                self._log_trade(lock, None, "settled", exit_px=settled, real=real, settled=True)
+                self.d.book.release(NAME, "settled", lock["lead_id"])
+                self.status = {"state": "idle", "mode": mode}
+                await self.d.alert("Gambler settled", f"{mode}: {t} paid {settled:.2f} per contract held")
+                return
             if lock.get("tp_order"):
                 self._log_trade(lock, None, "take_profit", exit_px=lock["tp"], maker_exit=True, real=real)
                 await self.d.alert("Gambler hit take profit", f"{mode}: {t} @ {lock['tp']:.2f}")
@@ -497,18 +510,45 @@ class Gambler:
         else:
             self.exit_tries += 1
 
-    async def _real(self, lock, broker) -> dict | None:
+    async def _real(self, lock, broker, closed: bool = True) -> dict | None:
         if lock.get("mode") not in ("live", "demo") or not hasattr(broker, "realized"):
             return None
         return await broker.realized(lock["ticker"], lock.get("opened", time.time() - 86400),
-                                     "yes" if lock.get("side") == "bid" else "no")
+                                     "yes" if lock.get("side") == "bid" else "no", closed=closed, tries=1 if not closed else 5)
 
-    def _log_trade(self, lock, ack, rule, exit_px=None, maker_exit=False, real=None):
+    async def _settled_value(self, lock, real) -> float | None:
+        """If the position ended by the market settling (not by a sale), what each held contract paid (YES terms)."""
+        if real and real.get("sell_qty", 0) >= real.get("buy_qty", 0) - 1e-9 and real.get("buy_qty"):
+            return None                                    # every contract was sold: not a settlement
+        meta = self.mdx.st(lock["ticker"]).meta
+        close = parse_ts(meta.get("close_time")) if meta.get("close_time") else None
+        if not close or time.time() < close:
+            return None
+        if meta.get("result") not in ("yes", "no"):
+            for _ in range(3):
+                meta = await self.mdx.refresh_meta(lock["ticker"])
+                if meta.get("result") in ("yes", "no"):
+                    break
+                await asyncio.sleep(2)
+        if meta.get("result") not in ("yes", "no"):
+            return None
+        return 1.0 if meta["result"] == "yes" else 0.0
+
+    def _log_trade(self, lock, ack, rule, exit_px=None, maker_exit=False, real=None, settled=False):
         entry, qty = lock.get("entry"), lock.get("qty", 0)
         if exit_px is None:
             exit_px = ack.avg_price if ack and ack.avg_price else None
         pnl = None
-        if real and real.get("buy_qty") and real.get("sell_qty", 0) >= real["buy_qty"] - 1e-9:
+        if settled and exit_px is not None:
+            # Settlement: held contracts pay $1 or $0 (no exit fee). exit_px is the YES value.
+            if real and real.get("buy_qty"):
+                held = real["buy_qty"] - real["sell_qty"]
+                pay = exit_px if lock["side"] == "bid" else 1 - exit_px
+                pnl = real["proceeds"] + held * pay - real["cost"] - real["fees"]
+                entry = real["avg_buy"] if lock["side"] == "bid" else round(1 - real["avg_buy"], 4)
+            elif entry is not None:
+                pnl = ((exit_px - entry) if lock["side"] == "bid" else (entry - exit_px)) * qty - (lock.get("entry_fee") or 0)
+        elif real and real.get("buy_qty") and real.get("sell_qty", 0) >= real["buy_qty"] - 1e-9:
             # Real money: Kalshi's own fills are the record (price improvement and actual fees included).
             entry, exit_px = real["avg_buy"], real["avg_sell"]
             if lock["side"] != "bid":                       # the lock keeps NO trades in YES terms

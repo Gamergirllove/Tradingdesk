@@ -430,7 +430,8 @@ def test_fifteen_minute_profile():
     f = profile(cfg, "funnel", "KXBTC15M")
     assert f["min_minutes_to_close"] == 2 and f["max_minutes_to_close"] == 16 and f["price_ceiling"] >= 0.85
     g = profile(cfg, "gambler", "KXBTC15M")
-    assert g["exit_minutes_before_close"] == 1 and g["size_pct_equity"] == 50
+    assert g["exit_minutes_before_close"] == 0 and g["size_pct_equity"] == 50 and g["stop_fixed_c"] == 10
+    assert g["halftime_rule"]["half_minutes"] == 4 and g["halftime_rule"]["min_price"] == 0.75 and not g["halftime_rule"]["require_accel"]
     assert profile(cfg, "gambler", "KXBTCD")["exit_minutes_before_close"] == 20
 
 
@@ -464,9 +465,12 @@ def test_halftime_on_board():
     board = {"gambler": {"rows": [{"ticker": t}]}}
     d = NS(cfg=cfg, flow=flow, und=und, md=None, funnel=NS(board=board))
     g = Gambler(d)
-    feat = {"minutes_to_close": 6.0, "mid": 0.78, "floor_strike": 100000.0}
+    feat = {"minutes_to_close": 3.5, "mid": 0.78, "floor_strike": 100000.0}       # inside the last 4 minutes
     ht = g.halftime(t, feat, "buy_yes")
     assert ht["ok"] and ht["distance"]["v"] == 150.0
+    assert not g.halftime(t, feat | {"minutes_to_close": 6.0}, "buy_yes")["ok"]     # too early under the tested rule
+    assert not g.halftime(t, feat | {"mid": 0.72}, "buy_yes")["ok"]                 # under 75c
+    assert g.halftime(t, feat, "buy_yes")["accel"]["ok"]
     assert not g.halftime(t, feat | {"minutes_to_close": 10.0}, "buy_yes")["ok"]
     assert g.halftime("KXBTCD-26NOV0417-T80249.99", feat, "buy_yes") is None        # other series: rule off
     dec = Decision(action="buy_yes", reasons=["all gates passed"], scores={"model_edge_c": 6.0, "action": "buy_yes"})
@@ -530,3 +534,31 @@ def test_gambler_live_target_is_15pct():
     g = d.bots["gambler"]
     assert g.tp_price("bid", 0.70) == 0.81 and g.tp_price("bid", 0.90) == 0.99   # capped at 99c
     assert g.tp_price("ask", 0.30) == 0.19                                      # NO at 0.70 -> NO 0.81
+
+
+def test_gambler_holds_to_result_and_logs_settlement():
+    from desk.engine.main import Desk
+    from desk.risk.engine import Intent
+    from desk.venues.kalshi import Book as KB
+    from desk import logs
+    from desk.util import local_day
+    d = Desk()
+    d.cfg["bots"]["gambler"]["mode"] = "paper"
+    g = d.bots["gambler"]
+    t = "KXBTC15M-26NOV081215-15"
+    book = KB(t, time.time(), bids=[(0.79, 500)], asks=[(0.80, 500)])
+    st = g.mdx.st(t)
+    st.book, st.book_ts, st.backfilled = book, time.time(), True
+    st.meta = {"ticker": t, "_series": "KXBTC15M", "status": "active", "close_time": "2026-11-08T20:15:00Z"}
+    it = Intent(bot="gambler", ticker=t, side="bid", count=10.0, price=0.80, tif="immediate_or_cancel",
+                expected_edge_c=None, fee_type="quadratic", fee_mult=1.0, model_version=None, state_ts=time.time(),
+                best_bid=0.79, best_ask=0.80, decision_id="lead_s", tag="entry", forced=True)
+    asyncio.run(g.place_entry(it, "paper", {"bot": "gambler"}, {"lo_60m": 0.40, "hi_60m": 0.85}))
+    lk = d.book.held("gambler")
+    assert lk and lk["stop"] == 0.70 and lk["tp"] == 0.92                 # fixed 10c stop, +15% target
+    st.meta = dict(st.meta, close_time="2026-11-08T00:00:00Z", status="finalized", result="yes")
+    d.brokers["paper_gambler"].settle(t, "yes")
+    asyncio.run(g.manage(lk, "paper"))
+    assert not d.book.held("gambler")
+    tr = [x for x in logs.read("trades", local_day(d.tz)) if x["bot"] == "gambler"][-1]
+    assert tr["rule"] == "settled" and tr["exit"] == 1.0 and abs(tr["pnl_after_fees"] - (10 * 0.20 - lk["entry_fee"])) < 1e-6
