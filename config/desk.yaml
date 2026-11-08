@@ -73,7 +73,7 @@ bots:
     min_edge_c: {pregame: 3, live: 5}     # fair minus Kalshi ask, after the entry fee
     max_edge_c: {pregame: 15, live: 20}   # a bigger gap usually means stale or mismatched data
     max_spread_c: 3
-    min_price: 0.15
+    min_price: 0.80           # fees and the -5% stop make cheaper contracts need 70-85%+ wins to break even
     max_price: 0.90
     min_volume_24h: 200
     confirm_scans: 2          # the gap has to be there on two checks in a row
@@ -183,7 +183,8 @@ series_profiles:              # per-series overrides on top of funnel / bots set
       max_hold_minutes: 15
       decision_every_s: 20    # checks 3x a minute so a speed-up after halftime isn't missed
       halftime_rule:          # yours: at halftime, the side at 70c+ with BTC $100+ past target and speeding up
-        enabled: true         # (both YES and NO), on top of the bot's own checks
+        enabled: true         # (both YES and NO)
+        decides: true         # the rule alone decides (no AI checks); the risk engine's hard limits still apply
         half_minutes: 7.5
         latest_minutes: 2
         min_price: 0.70

@@ -65,6 +65,8 @@ class Gambler:
         feat = with_fair(self.mdx.features(t), cand.und, self.mdx.implied_vol(t, cand.und.get("spot")))
         s = snap.gambler(feat, cand.und, self.d.flow.features() if getattr(self.d, "flow", None) else None)
         did = cand.lead_id
+        if self.rule_decides(t):
+            return await self.decide_by_rule(t, cand, feat, s, did, mode)
         v = await self.d.judge.ask(NAME, BATTERY, s, did)
         rec = {"bot": NAME, "decision_id": did, "lead_id": cand.lead_id, "ticker": t, "mode": mode, "state": s,
                "battery_id": v.battery_id, "verdict": v.kind, "answers": v.answers, "model_version": v.model_version,
@@ -120,6 +122,73 @@ class Gambler:
                     best_bid=feat["bid"], best_ask=feat["ask"], decision_id=did, tag="entry")
         rec["intent"] = it.to_dict()
         await self.place_entry(it, mode, rec, feat)
+
+    def rule_decides(self, ticker: str) -> bool:
+        rule = profile(self.d.cfg, "gambler", series_of(ticker)).get("halftime_rule") or {}
+        return bool(rule.get("enabled") and rule.get("decides"))
+
+    async def decide_by_rule(self, t, cand, feat, s, did, mode):
+        """Your halftime rule is the whole decision: no AI checks. The risk engine's hard limits still apply."""
+        ht = self.halftime(t, feat, "")
+        act = ("buy_yes" if ht["side"] == "yes" else "buy_no") if ht["ok"] else "hold"
+        failed = [k for k in ("time", "price", "distance", "accel") if not ht[k]["ok"]]
+        reasons = ["halftime rule passed"] if ht["ok"] else [f"halftime rule not met: {', '.join(failed)}"]
+        rec = {"bot": NAME, "decision_id": did, "lead_id": cand.lead_id, "ticker": t, "mode": mode, "state": s,
+               "verdict": "rule", "backend": "rule", "halftime": ht, "book": {"bid": feat.get("bid"), "ask": feat.get("ask")},
+               "policy": {"action": act, "reasons": reasons}}
+        self._board_rule(t, act, reasons, ht, feat)
+        if act == "hold":
+            logs.write("decisions", rec)
+            self.status = {"state": "hold", "mode": mode, "ticker": t, "reasons": reasons}
+            return
+        side = "bid" if act == "buy_yes" else "ask"
+        px = round(feat["ask"] if side == "bid" else feat["bid"], 2)
+        fair = feat.get("fair_yes")
+        edge_c = None if fair is None else (((fair - px) * 100) if side == "bid" else ((px - fair) * 100))
+        tp = self.tp_price(side, px)
+        gain_c = round(abs(tp - px) * 100, 2)
+        fee_c = kalshi_fee(px, 100, cand.fee_type, cand.fee_mult) / 100 * 100
+        count = await self.size(mode, side, px, cand.fee_type, cand.fee_mult)
+        rec["sizing"] = {"pct_equity": self.cfg.get("size_pct_equity"), "count": count, "tp": tp,
+                         "tp_gain_c": gain_c, "entry_fee_c": round(fee_c, 3)}
+        why = None
+        if gain_c <= fee_c:
+            why = f"{self.cfg['take_profit_pct']}% target is {gain_c}c, entry fee is {fee_c:.2f}c"
+        elif count < 1:
+            why = "stake too small for one contract"
+        if why:
+            rec["policy"] = {"action": "hold", "reasons": [why]}
+            logs.write("decisions", rec)
+            self.status = {"state": "hold", "mode": mode, "ticker": t, "reasons": [why]}
+            return
+        it = Intent(bot=NAME, ticker=t, side=side, count=float(count), price=px, tif="immediate_or_cancel",
+                    expected_edge_c=None if edge_c is None else r(edge_c, 2), fee_type=cand.fee_type,
+                    fee_mult=cand.fee_mult, model_version=None, state_ts=self.mdx.st(t).book_ts,
+                    best_bid=feat["bid"], best_ask=feat["ask"], decision_id=did, tag="entry", forced=True)
+        rec["intent"] = it.to_dict()
+        await self.place_entry(it, mode, rec, feat)
+
+    def _board_rule(self, ticker, act, reasons, ht, feat):
+        rule = profile(self.d.cfg, "gambler", series_of(ticker)).get("halftime_rule") or {}
+        sidew = "YES" if ht["side"] == "yes" else "NO"
+        mp = round(float(rule.get("min_price", .7)) * 100)
+        gates = [
+            {"k": "ht_time", "label": "Halftime or later", "v": ht["time"]["v"], "unit": "min", "ok": ht["time"]["ok"],
+             "need": f"{rule.get('latest_minutes', 2)}–{rule.get('half_minutes', 7.5)} min left"},
+            {"k": "ht_price", "label": f"{sidew} at {mp}¢+", "v": ht["price"]["v"], "unit": "c", "ok": ht["price"]["ok"],
+             "need": f"{mp}¢"},
+            {"k": "ht_dist", "label": f"BTC ${rule.get('min_distance_usd', 100)}+ {'above' if ht['side'] == 'yes' else 'below'} target",
+             "v": ht["distance"]["v"], "unit": "$", "ok": ht["distance"]["ok"], "need": f"${rule.get('min_distance_usd', 100)}"},
+            {"k": "ht_accel", "label": "Speeding up", "v": ht["accel"]["v"], "unit": "$/min", "ok": ht["accel"]["ok"],
+             "need": "faster"},
+        ]
+        b = self.fx.board.get(NAME)
+        if not b:
+            return
+        for row in b["rows"]:
+            if row["ticker"] == ticker:
+                row.update({"judged": True, "judge": "your rule", "action": act, "reasons": reasons, "gates": gates,
+                            "ts_judged": time.time()})
 
     def halftime(self, ticker: str, feat: dict, action: str) -> dict | None:
         rule = profile(self.d.cfg, "gambler", series_of(ticker)).get("halftime_rule") or {}

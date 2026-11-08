@@ -65,6 +65,7 @@ def sports_desk(monkeypatch, phase="pre", home_ml="-150", away_ml="+130", ask=0.
     from desk.engine.main import Desk
     d = Desk(judge=FakeJudge())
     d.cfg["bots"]["sports"]["mode"] = "paper"
+    d.cfg["bots"]["sports"]["min_price"] = 0.15          # these tests price around 50c; the live floor is 80c
     sp = d.bots["sports"]
     now = time.time()
     start = dt.datetime.fromtimestamp(now + (45 if phase == "pre" else -3600), dt.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
@@ -282,3 +283,10 @@ def test_pregame_bets_only_in_the_last_minute(monkeypatch):
     monkeypatch.setattr(S, "parse_game", lambda e: dict(orig(e), start_ts=time.time() - 120))   # past the time, not started
     run(sp.scan("paper")); run(sp.scan("paper"))
     assert sp.locks()
+
+
+
+def test_live_floor_is_80c():
+    from desk.config import load_config
+    c = load_config()["bots"]["sports"]
+    assert c["min_price"] == 0.80 and c["max_price"] == 0.90

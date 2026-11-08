@@ -482,3 +482,39 @@ def test_rules_fallback_answers_pass_the_version_pin():
     why = lambda mv: r.check(mk(mv), 0, 0, 100.0)[1]
     assert "model_version" not in why("rules-v1") and "model_version" not in why("claude-haiku-5-5-x")
     assert "tuned on" in why("claude-other")
+
+
+def test_halftime_rule_decides_15m_without_ai(monkeypatch):
+    import asyncio
+    from types import SimpleNamespace as NS
+    from desk.engine.main import Desk
+    from tests.test_sports import FakeJudge
+    d = Desk(judge=FakeJudge())
+    g = d.bots["gambler"]
+    t = "KXBTC15M-26NOV081215-15"
+    assert g.rule_decides(t) and not g.rule_decides("KXBTCD-26NOV0817-T80249.99")
+    ok = {"ok": True, "side": "yes", "time": {"v": 5.0, "ok": True}, "price": {"v": .75, "ok": True},
+          "distance": {"v": 140.0, "ok": True}, "accel": {"v": 12.0, "d1": 30.0, "ok": True}}
+    placed = []
+
+    async def size(*a):
+        return 6
+
+    async def place_entry(it, mode, rec, feat):
+        placed.append((it, rec))
+
+    monkeypatch.setattr(g, "size", size)
+    monkeypatch.setattr(g, "place_entry", place_entry)
+    monkeypatch.setattr(g, "halftime", lambda tk, f, a: ok)
+    cand = NS(lead_id="lead_x", fee_type="quadratic", fee_mult=1.0)
+    feat = {"bid": .74, "ask": .75, "fair_yes": .70, "mid": .745}       # model says no edge; the rule decides anyway
+    asyncio.run(g.decide_by_rule(t, cand, feat, {}, "lead_x", "paper"))
+    it, rec = placed[0]
+    assert it.side == "bid" and it.price == .75 and it.count == 6 and it.forced and d.judge.calls == 0
+    assert rec["policy"]["reasons"] == ["halftime rule passed"]
+    import dataclasses, time as _t
+    assert d.risk.check(dataclasses.replace(it, state_ts=_t.time()), 0, 0, 100.0)[0]   # hard limits pass, no economics veto
+    bad = dict(ok, ok=False, accel={"v": -3.0, "d1": 10.0, "ok": False})
+    monkeypatch.setattr(g, "halftime", lambda tk, f, a: bad)
+    asyncio.run(g.decide_by_rule(t, cand, feat, {}, "lead_y", "paper"))
+    assert len(placed) == 1 and g.status["reasons"] == ["halftime rule not met: accel"]

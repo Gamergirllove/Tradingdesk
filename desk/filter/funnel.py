@@ -151,7 +151,10 @@ class Funnel:
                 px = feat["ask"] if edge > 0 else feat["bid"]
                 fee_c = kalshi_fee(px, 1, ft, fm) * 100
                 net = abs(edge) - (feat["spread_c"] / 2) - fee_c
-                if abs(edge) < self.cfg["policy"]["gambler"]["min_model_edge_c"] or net < self.cfg["risk"]["min_edge_over_fees_c"]:
+                ht_rule = profile(self.cfg, "gambler", m.get("_series", "")).get("halftime_rule") or {}
+                rule_decides = bot == "gambler" and ht_rule.get("enabled") and ht_rule.get("decides")
+                if not rule_decides and (abs(edge) < self.cfg["policy"]["gambler"]["min_model_edge_c"]
+                                         or net < self.cfg["risk"]["min_edge_over_fees_c"]):
                     rej.append((t, 3, "no_edge"))
                     counts["no_edge"] += 1
                     self.bench.bench(f"{bot}:{t}", "no_edge", scale=self._bscale(t))
