@@ -530,12 +530,16 @@ class Sports:
         if real and real.get("buy_qty"):
             # Real money: Kalshi's own fills are the record (price improvement and actual fees included).
             entry = real["avg_buy"]
-            payout = real["proceeds"]
-            if settled and exit_px is not None:
-                payout += max(0.0, real["buy_qty"] - real["sell_qty"]) * exit_px
-            elif real["avg_sell"] is not None:
+            payout, fees = real["proceeds"], real["fees"]
+            missing = max(0.0, real["buy_qty"] - real["sell_qty"])
+            if missing and exit_px is not None:
+                payout += missing * exit_px
+                if not settled:
+                    fees += kalshi_fee(exit_px, missing, lk.get("fee_type", "quadratic"), lk.get("fee_mult", 1.0),
+                                       maker=maker_exit)
+            if not settled and real["avg_sell"] is not None and not missing:
                 exit_px = real["avg_sell"]
-            pnl = payout - real["cost"] - real["fees"]
+            pnl = payout - real["cost"] - fees
         elif exit_px is not None and entry is not None:
             ft, fm = lk.get("fee_type", "quadratic"), lk.get("fee_mult", 1.0)
             exit_fee = 0.0 if settled else (ack_fee if ack_fee is not None and lk.get("mode") == "paper"

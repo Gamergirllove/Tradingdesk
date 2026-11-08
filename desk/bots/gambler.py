@@ -508,7 +508,7 @@ class Gambler:
         if exit_px is None:
             exit_px = ack.avg_price if ack and ack.avg_price else None
         pnl = None
-        if real and real.get("buy_qty") and real.get("sell_qty"):
+        if real and real.get("buy_qty") and real.get("sell_qty", 0) >= real["buy_qty"] - 1e-9:
             # Real money: Kalshi's own fills are the record (price improvement and actual fees included).
             entry, exit_px = real["avg_buy"], real["avg_sell"]
             if lock["side"] != "bid":                       # the lock keeps NO trades in YES terms

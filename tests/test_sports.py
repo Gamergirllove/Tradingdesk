@@ -290,3 +290,22 @@ def test_live_floor_is_80c():
     from desk.config import load_config
     c = load_config()["bots"]["sports"]
     assert c["min_price"] == 0.80 and c["max_price"] == 0.90
+
+
+def test_realized_waits_for_trailing_fills():
+    from desk.broker.kalshi_broker import KalshiBroker
+
+    class C:
+        n = 0
+
+        async def fills(self, min_ts=None, ticker=None):
+            C.n += 1
+            rows = [{"action": "buy", "count_fp": "12", "yes_price_dollars": "0.64", "fee_cost": "0.1936"}]
+            if C.n >= 3:                                   # the sell shows up on the third read
+                rows += [{"action": "sell", "count_fp": "10", "yes_price_dollars": "0.60", "fee_cost": "0.168"},
+                         {"action": "sell", "count_fp": "2", "yes_price_dollars": "0.60", "fee_cost": "0.0336"}]
+            return rows
+
+    kb = KalshiBroker(C(), "live")
+    r = run(kb.realized("T", 0, "yes", wait_s=0))
+    assert C.n == 3 and r["sell_qty"] == 12 and abs(r["proceeds"] - r["cost"] - r["fees"] - (-0.8752)) < 1e-6

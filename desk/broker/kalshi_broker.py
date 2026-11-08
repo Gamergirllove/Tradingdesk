@@ -2,6 +2,8 @@
 confidence is not permission, and an ack is not a fill."""
 from __future__ import annotations
 
+import asyncio
+
 import time
 
 from .. import logs
@@ -141,8 +143,20 @@ class KalshiBroker:
         v = fnum(b.get("balance"))
         return None if v is None else v / 100.0
 
-    async def realized(self, ticker: str, since_ts: float, holding: str = "yes") -> dict | None:
-        """What actually happened on Kalshi for one position: fills since it opened, in the held contract's price."""
+    async def realized(self, ticker: str, since_ts: float, holding: str = "yes", closed: bool = True,
+                       tries: int = 5, wait_s: float = 1.5) -> dict | None:
+        """What actually happened on Kalshi for one position: fills since it opened, in the held contract's price.
+        Kalshi's fills list can trail an exit by a few seconds, so a closed position is re-read until every
+        contract bought shows as sold."""
+        out = None
+        for i in range(max(1, tries)):
+            out = await self._realized_once(ticker, since_ts, holding)
+            if out is None or not closed or out["sell_qty"] >= out["buy_qty"] - 1e-9:
+                return out
+            await asyncio.sleep(wait_s)
+        return out
+
+    async def _realized_once(self, ticker: str, since_ts: float, holding: str) -> dict | None:
         try:
             rows = await self.c.fills(min_ts=int(since_ts) - 60, ticker=ticker)
         except KalshiError:
