@@ -263,8 +263,8 @@ class Sports:
             return
         maybe_pin(self.d, v)
         pol = self.d.cfg["policy"][NAME]
-        worth = (v.answers.get("worth") or {}).get("p_true")
-        degr = (v.answers.get("exec_degraded") or {}).get("p_true")
+        pv = lambda a: (a or {}).get("p", (a or {}).get("p_true"))      # the judge returns yes/no answers as {"p": ...}
+        worth, degr = pv(v.answers.get("worth")), pv(v.answers.get("exec_degraded"))
         reasons = []
         if worth is None or worth < pol["worth_min"]:
             reasons.append(f"worth {worth} < {pol['worth_min']}")

@@ -55,7 +55,7 @@ class FakeJudge:
     async def ask(self, bot, qs, state, did, deadline_ms=None):
         self.calls += 1
         return Verdict(ok=True, kind="ok", action="proceed", model_version="rules-v1", backend="rules",
-                       answers={"worth": {"p_true": self.worth}, "exec_degraded": {"p_true": 0.1}})
+                       answers={"worth": {"p": self.worth}, "exec_degraded": {"p": 0.1}})
 
     async def health(self):
         return {}
