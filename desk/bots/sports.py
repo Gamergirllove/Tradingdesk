@@ -42,6 +42,7 @@ class Sports:
         self.matches: dict[str, tuple[float, str | None, dict | str]] = {}   # event -> (ts, espn id, side map | reason)
         self.exit_tries: dict[str, int] = {}
         self.games: dict[str, dict] = {}                      # espn id -> parsed game, latest scan
+        self.stopped_events: set[str] = set()                 # games stopped out of: live re-entry allowed
 
     @property
     def cfg(self):
@@ -120,7 +121,8 @@ class Sports:
                         continue
                     rows.append(self._row(m, s, label, path, g, side, phase, fees[s], held, held_events, now))
         # Live fair prices: only for live rows that pass every price gate, the busiest first (ESPN reads are capped).
-        live = [x for x in rows if x["phase"] == "live" and x["fair"] is None and x["_pre_ok"]]
+        live = [x for x in rows if x["phase"] == "live" and x["fair"] is None and x["_pre_ok"]
+                and (c.get("live", True) or (c.get("reentry_live") and x["event_ticker"] in self.stopped_events))]
         live.sort(key=lambda x: -(x["vol_24h"] or 0))
         for x in live[: int(c.get("max_live_wp_reads", 8))]:
             wp = await self.espn.live_wp(x["path"], x["espn_id"])
@@ -161,7 +163,8 @@ class Sports:
             o = g["odds"]
             self._set_fair(x, o["p_home"] if side == "home" else o["p_away"],
                            f"{o.get('provider') or 'Sportsbook'} moneyline, margin removed")
-        elif phase == "live" and path in LIVE_WP and g.get("wp_home") is not None and c.get("live", True):
+        elif phase == "live" and path in LIVE_WP and g.get("wp_home") is not None and \
+                (c.get("live", True) or (c.get("reentry_live") and m["event_ticker"] in self.stopped_events)):
             self._set_fair(x, g["wp_home"] if side == "home" else 1 - g["wp_home"], "ESPN live win probability")
         x["_pre_ok"] = bool(ask and bid and x["spread_c"] is not None and x["spread_c"] <= c["max_spread_c"]
                             and c["min_price"] <= ask <= c["max_price"])
@@ -179,13 +182,15 @@ class Sports:
         ph = x["phase"] or "pregame"
         mn = float((c.get("min_edge_c") or {}).get(ph, 3))
         mx = float((c.get("max_edge_c") or {}).get(ph, 15))
+        live_ok = c.get("live", True) or (c.get("reentry_live") and x["event_ticker"] in self.stopped_events)
         when_ok = (x["phase"] == "pregame" and x["minutes_to_start"] is not None
                    and x["minutes_to_start"] <= float(c.get("pregame_minutes", 1))) or \
-                  (x["phase"] == "live" and c.get("live", True) and x["path"] in LIVE_WP)
+                  (x["phase"] == "live" and live_ok and x["path"] in LIVE_WP)
         if x["phase"] == "pregame":
             when_need = f"{c.get('pregame_minutes', 1):g} min before start"
         elif x["phase"] == "live":
-            when_need = "live, ESPN win prob" if x["path"] in LIVE_WP else "no live price for NHL"
+            when_need = ("no live price for NHL" if x["path"] not in LIVE_WP else
+                         "live, ESPN win prob" if live_ok else "live only to re-enter after a stop")
         else:
             when_need = "game over"
         open_n = len(self.locks())
@@ -308,6 +313,9 @@ class Sports:
         sl_pct = float(self.cfg.get("stop_loss_pct") or 0) / 100
         tp = round(min(0.99, max(entry + 0.01, math.ceil(round(entry * (1 + tp_pct) * 100, 6)) / 100)), 2) if tp_pct else None
         sl = round(max(0.01, min(entry - 0.01, math.floor(round(entry * (1 - sl_pct) * 100, 6)) / 100)), 2) if sl_pct else None
+        pts = float(self.cfg.get("stop_points") or 0) / 100
+        if pts:                                          # stop in points on the contract: in at 80c, out at 70c
+            sl = round(max(0.01, entry - pts), 2)
         return tp, sl
 
     async def open_bet(self, x: dict, mode: str, rec: dict, model_version: str | None, did: str, forced: bool):
@@ -513,9 +521,11 @@ class Sports:
             self.exit_tries.pop(t, None)
             self._log_trade(lk, rule, ack.avg_price or px, ack_fee=ack.fee, real=await self._real(lk, broker))
             self.d.book.release(key, f"exit:{rule}", lk["lead_id"])
-            if rule in ("stop", "manual_stop"):          # no buying the same game back right after a stop
-                self.d.bench.bench(f"{NAME}:{lk.get('event_ticker')}", "sports_stopped",
-                                   until=time.time() + float(self.cfg.get("reentry_after_stop_min", 120)) * 60)
+            if rule == "stop":
+                self.stopped_events.add(lk.get("event_ticker"))
+            wait = float(self.cfg.get("reentry_after_stop_min", 0))
+            if rule in ("stop", "manual_stop") and wait > 0:
+                self.d.bench.bench(f"{NAME}:{lk.get('event_ticker')}", "sports_stopped", until=time.time() + wait * 60)
             await self.d.alert("Sports bet closed", f"{mode}: {lk.get('team')} {rule} @ {px:.2f}")
         else:
             self.exit_tries[t] = tries + 1

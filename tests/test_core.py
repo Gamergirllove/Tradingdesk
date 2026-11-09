@@ -431,7 +431,8 @@ def test_fifteen_minute_profile():
     assert f["min_minutes_to_close"] == 2 and f["max_minutes_to_close"] == 16 and f["price_ceiling"] >= 0.85
     g = profile(cfg, "gambler", "KXBTC15M")
     assert g["exit_minutes_before_close"] == 0 and g["size_pct_equity"] == 50 and g["stop_fixed_c"] == 10
-    assert g["halftime_rule"]["half_minutes"] == 4 and g["halftime_rule"]["min_price"] == 0.75 and not g["halftime_rule"]["require_accel"]
+    assert g["halftime_rule"]["half_minutes"] == 4 and g["halftime_rule"]["min_price"] == 0.80 and not g["halftime_rule"]["require_accel"]
+    assert g["halftime_rule"]["min_distance_usd"] == 50
     assert profile(cfg, "gambler", "KXBTCD")["exit_minutes_before_close"] == 20
 
 
@@ -465,11 +466,11 @@ def test_halftime_on_board():
     board = {"gambler": {"rows": [{"ticker": t}]}}
     d = NS(cfg=cfg, flow=flow, und=und, md=None, funnel=NS(board=board))
     g = Gambler(d)
-    feat = {"minutes_to_close": 3.5, "mid": 0.78, "floor_strike": 100000.0}       # inside the last 4 minutes
+    feat = {"minutes_to_close": 3.5, "mid": 0.82, "floor_strike": 100000.0}       # inside the last 4 minutes, 80c+
     ht = g.halftime(t, feat, "buy_yes")
     assert ht["ok"] and ht["distance"]["v"] == 150.0
     assert not g.halftime(t, feat | {"minutes_to_close": 6.0}, "buy_yes")["ok"]     # too early under the tested rule
-    assert not g.halftime(t, feat | {"mid": 0.72}, "buy_yes")["ok"]                 # under 75c
+    assert not g.halftime(t, feat | {"mid": 0.78}, "buy_yes")["ok"]                 # under 80c
     assert g.halftime(t, feat, "buy_yes")["accel"]["ok"]
     assert not g.halftime(t, feat | {"minutes_to_close": 10.0}, "buy_yes")["ok"]
     assert g.halftime("KXBTCD-26NOV0417-T80249.99", feat, "buy_yes") is None        # other series: rule off

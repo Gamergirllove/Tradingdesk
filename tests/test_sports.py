@@ -66,8 +66,8 @@ def sports_desk(monkeypatch, phase="pre", home_ml="-150", away_ml="+130", ask=0.
     d = Desk(judge=FakeJudge())
     d.cfg["bots"]["sports"]["mode"] = "paper"
     d.cfg["bots"]["sports"].update({                     # these tests check the mechanics at the earlier settings
-        "min_price": 0.15, "take_profit_pct": 10, "stop_loss_pct": 5, "live": True, "size_pct_equity": 50,
-        "min_edge_c": {"pregame": 3, "live": 5}})
+        "min_price": 0.15, "take_profit_pct": 10, "stop_loss_pct": 5, "stop_points": 0, "live": True, "size_pct_equity": 50,
+        "min_edge_c": {"pregame": 3, "live": 5}, "reentry_after_stop_min": 120, "reentry_live": False})
     sp = d.bots["sports"]
     now = time.time()
     start = dt.datetime.fromtimestamp(now + (45 if phase == "pre" else -3600), dt.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
@@ -320,9 +320,9 @@ def test_hold_to_final_settles(monkeypatch):
     from desk.util import local_day
     from desk.config import load_config
     c = load_config()["bots"]["sports"]
-    assert c["take_profit_pct"] == 0 and c["stop_loss_pct"] == 0 and c["size_pct_equity"] == 20 and c["live"] is False
+    assert c["take_profit_pct"] == 0 and c["stop_points"] == 10 and c["size_pct_equity"] == 20 and c["live"] is False
     d, sp, state, ev = sports_desk(monkeypatch, ask=0.50)
-    d.cfg["bots"]["sports"].update({"take_profit_pct": 0, "stop_loss_pct": 0, "size_pct_equity": 20})
+    d.cfg["bots"]["sports"].update({"take_profit_pct": 0, "stop_loss_pct": 0, "stop_points": 0, "size_pct_equity": 20})
     run(sp.scan("paper")); run(sp.scan("paper"))
     k, t = f"sports:{ev}-PHX", f"{ev}-PHX"
     lk = d.book.held(k)
@@ -339,3 +339,25 @@ def test_hold_to_final_settles(monkeypatch):
     assert not d.book.held(k)
     tr = [x for x in logs.read("trades", local_day(d.tz)) if x["bot"] == "sports"][-1]
     assert tr["rule"] == "settled" and tr["exit"] == 1.0 and tr["pnl_after_fees"] > 0
+
+
+
+def test_ten_point_stop_and_live_reentry(monkeypatch):
+    """Your settings: stop 10 points under the entry once the game starts; after a stop, re-enter live if it passes."""
+    d, sp, state, ev = sports_desk(monkeypatch, ask=0.50, wp=0.62)
+    d.cfg["bots"]["sports"].update({"take_profit_pct": 0, "stop_loss_pct": 0, "stop_points": 10, "live": False,
+                                    "reentry_live": True, "reentry_after_stop_min": 0})
+    run(sp.scan("paper")); run(sp.scan("paper"))
+    k = f"sports:{ev}-PHX"
+    lk = d.book.held(k)
+    assert lk and lk["stop"] == 0.40 and lk["tp"] is None
+    state["phase"] = "in"; state["ask"] = 0.42; run(sp.scan("paper"))   # live: no live bets yet (not stopped out)
+    run(sp.step())
+    assert d.book.held(k)                                                # bid 0.41 > stop 0.40
+    state["ask"] = 0.40
+    run(sp.step())                                                       # bid 0.39 <= 0.40: out
+    assert not d.book.held(k) and ev in sp.stopped_events
+    state["ask"] = 0.52                                                  # ESPN live says 62%: favorable again
+    run(sp.scan("paper")); run(sp.scan("paper"))
+    lk2 = d.book.held(k)
+    assert lk2 and lk2["entry"] == 0.52 and lk2["stop"] == 0.42

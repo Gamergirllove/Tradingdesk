@@ -64,8 +64,9 @@ bots:
     series: [KXNFLGAME, KXNCAAFGAME, KXNBAGAME, KXNHLGAME]
     scan_every_s: 20
     size_pct_equity: 20       # of the account per bet; holding to the final, a loss costs the whole stake
-    take_profit_pct: 0        # 0 = no take-profit: hold to the final (tested best on 7 days of games)
-    stop_loss_pct: 0          # 0 = no stop (the -5% stop hit 56% of the time in live games)
+    take_profit_pct: 0        # 0 = no take-profit: hold to the final
+    stop_loss_pct: 0          # (percent stop off)
+    stop_points: 10           # stop 10 points under the entry once the game starts: in at 80c, out at 70c
     max_open_bets: 2
     daily_loss_stop: false    # no daily stop for Sports; its P&L is left out of the Gambler's daily limit
     pregame_minutes: 1        # pregame bets only in the last minute before the start (until ESPN shows it started)
@@ -77,7 +78,8 @@ bots:
     max_price: 0.90
     min_volume_24h: 200
     confirm_scans: 2          # the gap has to be there on two checks in a row
-    reentry_after_stop_min: 120   # after a stop, no new bet on that game for 2 hours
+    reentry_after_stop_min: 0     # after a stop, the same game can be bet again right away...
+    reentry_live: true            # ...during the game, when it passes every check again (NFL, NBA, college FB)
     hold_until_start: true    # a bet placed before the game isn't sold (no take-profit, no stop) until it starts
     max_live_wp_reads: 8
   house:
@@ -183,14 +185,14 @@ series_profiles:              # per-series overrides on top of funnel / bots set
       max_hold_minutes: 15
       stop_fixed_c: 10        # stop 10c below the entry on the contract held
       decision_every_s: 20
-      halftime_rule:          # tested on 7 days of 15-min markets (664): 23 trades, 91% wins, $30 -> $70
-        enabled: true         # both YES and NO
+      halftime_rule:          # your settings (21-day test: 321 trades, 71% wins, -3.3% per trade)
+        enabled: true         # both YES and NO; re-enters the same window if the rule passes again
         decides: true         # the rule alone decides (no AI checks); the risk engine's hard limits still apply
         half_minutes: 4       # enter only in the last 4 minutes...
         latest_minutes: 2     # ...and not under 2 minutes left
-        min_price: 0.75       # that side at 75c+ (the funnel skips 92c+)
-        min_distance_usd: 100 # BTC $100+ past the target on that side
-        require_accel: false  # speed-up shown but not required (it cut winners in the test)
+        min_price: 0.80       # that side at 80c+ (the funnel skips 92c+)
+        min_distance_usd: 50  # BTC $50+ past the target on that side
+        require_accel: false
     house: {stop_minutes_before_close: 3}
   KXBTCD:
     funnel: {min_history_points: 20}
