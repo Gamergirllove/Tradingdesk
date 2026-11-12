@@ -241,6 +241,11 @@ class Desk:
                     eq[k] = await b.equity()
                 self.equity = eq
                 self.risk.roll_day(eq)
+                lad = self.cfg["risk"].get("ladder") or {}
+                if lad.get("enabled") and eq.get("live", 0) >= float(lad.get("target_usd", 500)) \
+                        and "gambler" not in self.risk.state.halted_bots:
+                    self.risk.halt(f"ladder target reached: ${eq['live']:.2f}", bot="gambler")
+                    await self.alert("Target reached", f"Account is ${eq['live']:.2f}. The Gambler has stopped.", "urgent")
                 for k, e in eq.items():
                     hit, pnl = self.risk.daily_loss_breached(k, e - self.manual_pnl_today(k))
                     # A loss-limit halt that came only from hand-forced trades is lifted: those don't count.

@@ -155,7 +155,7 @@ def test_risk_engine():
     assert not r.check(Intent(**{**it.to_dict(), "expected_edge_c": 1.0}), 0, 0, 100)[0]      # below fees + min
     assert not r.check(Intent(**{**it.to_dict(), "count": 600}), 0, 0, 1000)[0]
     assert not r.check(Intent(**{**it.to_dict(), "state_ts": time.time() - 999}), 0, 0, 100)[0]
-    assert not r.check(it, 0, 99, 100)[0]                                                    # exposure cap
+    assert not r.check(it, 0, 599, 100)[0]                                                   # exposure cap
     r.halt("test")
     assert not r.check(it, 0, 0, 100)[0]
     ex = Intent(bot="gambler", ticker="T", side="ask", count=5, price=0.40, reduce_only=True, tif="immediate_or_cancel")
@@ -252,6 +252,7 @@ def test_gambler_tp_and_sizing():
     from desk.engine.main import Desk
     d = Desk()
     d.cfg["bots"]["gambler"]["take_profit_pct"] = 5    # these tests check the arithmetic at +5%
+    d.cfg["bots"]["gambler"]["size_pct_equity"] = 50
     g = Gambler(d)
     assert g.tp_price("bid", 0.40) == 0.42            # +5% on YES
     assert g.tp_price("ask", 0.60) == 0.58            # NO bought at 0.40 -> NO 0.42 -> YES 0.58
@@ -430,7 +431,7 @@ def test_fifteen_minute_profile():
     f = profile(cfg, "funnel", "KXBTC15M")
     assert f["min_minutes_to_close"] == 2 and f["max_minutes_to_close"] == 16 and f["price_ceiling"] >= 0.85
     g = profile(cfg, "gambler", "KXBTC15M")
-    assert g["exit_minutes_before_close"] == 0 and g["size_pct_equity"] == 50 and g["stop_fixed_c"] == 10
+    assert g["exit_minutes_before_close"] == 0 and g["size_pct_equity"] == 100 and g["stop_fixed_c"] == 10
     assert g["halftime_rule"]["half_minutes"] == 4 and g["halftime_rule"]["min_price"] == 0.80 and not g["halftime_rule"]["require_accel"]
     assert g["halftime_rule"]["min_distance_usd"] == 50
     assert profile(cfg, "gambler", "KXBTCD")["exit_minutes_before_close"] == 20
@@ -563,3 +564,15 @@ def test_gambler_holds_to_result_and_logs_settlement():
     assert not d.book.held("gambler")
     tr = [x for x in logs.read("trades", local_day(d.tz)) if x["bot"] == "gambler"][-1]
     assert tr["rule"] == "settled" and tr["exit"] == 1.0 and abs(tr["pnl_after_fees"] - (10 * 0.20 - lk["entry_fee"])) < 1e-6
+
+
+def test_ladder_floor_and_target():
+    from desk.config import load_config
+    from desk.risk.engine import RiskEngine
+    cfg = load_config()
+    assert cfg["risk"]["ladder"]["enabled"] and cfg["bots"]["gambler"]["size_pct_equity"] == 100
+    r = RiskEngine(cfg, "America/Los_Angeles")
+    r.state.day_start_equity["live"] = 30.0
+    assert r.loss_limit("live") == 15.0                      # half of the day's starting account
+    assert not r.daily_loss_breached("live", 16.0)[0] and r.daily_loss_breached("live", 15.0)[0]
+    assert r.loss_limit("paper_gambler") == cfg["risk"]["daily_loss_limit_usd"]

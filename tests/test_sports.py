@@ -65,6 +65,7 @@ def sports_desk(monkeypatch, phase="pre", home_ml="-150", away_ml="+130", ask=0.
     from desk.engine.main import Desk
     d = Desk(judge=FakeJudge())
     d.cfg["bots"]["sports"]["mode"] = "paper"
+    d.cfg["bots"]["sports"]["enabled"] = True
     d.cfg["bots"]["sports"].update({                     # these tests check the mechanics at the earlier settings
         "min_price": 0.15, "take_profit_pct": 10, "stop_loss_pct": 5, "stop_points": 0, "live": True, "size_pct_equity": 50,
         "min_edge_c": {"pregame": 3, "live": 5}, "reentry_after_stop_min": 120, "reentry_live": False})

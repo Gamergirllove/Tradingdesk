@@ -51,7 +51,7 @@ bots:
     enabled: true
     mode: shadow              # rung: shadow -> paper -> demo -> live
     decision_every_s: 60
-    size_pct_equity: 50       # stake per trade as % of the account, from rules, never from model confidence
+    size_pct_equity: 100      # ladder: the whole account each trade (less the reserve)
     take_profit_pct: 15       # +15% on the contract held (capped at 99c), rested as a post-only maker order
     stop_c: 5
     stop_buffer_c: 1          # stop goes beyond the recent swing low/high, not at a round number
@@ -59,7 +59,7 @@ bots:
     max_hold_minutes: 90
     volume_exit_ratio: 0.2    # last-30m volume below 20% of its pace -> close within 60s
   sports:
-    enabled: true
+    enabled: false           # paused while the bitcoin ladder uses the whole account
     mode: paper
     series: [KXNFLGAME, KXNCAAFGAME, KXNBAGAME, KXNHLGAME]
     scan_every_s: 20
@@ -121,7 +121,11 @@ policy:
 risk:
   max_order_contracts: 500
   max_position_contracts: 500
-  max_total_exposure_usd: 100
+  max_total_exposure_usd: 600
+  ladder:                     # all-in ladder on 15-min bitcoin
+    enabled: true
+    target_usd: 500           # the Gambler stops when the account reaches this
+    floor_pct: 50             # ...or when the day's loss reaches half of the account at the day's start
   daily_loss_limit_usd: 5     # bot losses only (trades you force by hand don't count); halts until you approve
   resume_loss_add_usd: 6      # each Resume after that halt allows $6 more loss from where the day stands (resets at midnight)
   min_edge_over_fees_c: 1     # taker entries: code edge must beat fees by this much per contract
@@ -129,7 +133,7 @@ risk:
   max_state_age_s: 30
   price_min: 0.03
   price_max: 0.97
-  balance_reserve_usd: 2
+  balance_reserve_usd: 1
 
 funnel:
   max_spread_c: 4

@@ -127,12 +127,20 @@ class RiskEngine:
         start = self.state.day_start_equity.get(key)
         return 0.0 if start is None else round(equity - start, 4)
 
+    def base_limit(self, key: str) -> float:
+        """Daily loss allowed before Resume. Ladder mode: a share of the account at the day's start."""
+        lad = self.cfg["risk"].get("ladder") or {}
+        start = self.state.day_start_equity.get(key)
+        if lad.get("enabled") and key == "live" and start:
+            return round(float(start) * float(lad.get("floor_pct", 50)) / 100, 2)
+        return float(self.cfg["risk"]["daily_loss_limit_usd"])
+
     def loss_limit(self, key: str) -> float:
-        return round(float(self.cfg["risk"]["daily_loss_limit_usd"]) + float(self.state.loss_extra.get(key, 0)), 2)
+        return round(self.base_limit(key) + float(self.state.loss_extra.get(key, 0)), 2)
 
     def extend_loss(self, key: str, pnl: float, add: float) -> float:
         """Resume after a loss-limit halt: allow `add` more loss from where the day stands now."""
-        base = float(self.cfg["risk"]["daily_loss_limit_usd"])
+        base = self.base_limit(key)
         need = max(0.0, -pnl) + add - base
         self.state.loss_extra[key] = round(max(float(self.state.loss_extra.get(key, 0)), need), 2)
         self.save()
