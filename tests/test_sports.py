@@ -362,3 +362,8 @@ def test_ten_point_stop_and_live_reentry(monkeypatch):
     run(sp.scan("paper")); run(sp.scan("paper"))
     lk2 = d.book.held(k)
     assert lk2 and lk2["entry"] == 0.52 and lk2["stop"] == 0.42
+
+
+def test_sports_switched_on():
+    from desk.config import load_config
+    assert load_config()["bots"]["sports"]["enabled"] is True

@@ -119,6 +119,9 @@ Environment=HOME=$DATA/home-engine
 $COMMON
 ExecStart=$APP/.venv/bin/python -m desk.engine.main
 MemoryMax=400M
+# At the memory cap, restart instead of crawling in swap (it froze for 13 min on Nov 17); restart daily too.
+MemorySwapMax=0
+RuntimeMaxSec=1d
 [Install]
 WantedBy=multi-user.target
 EOF
